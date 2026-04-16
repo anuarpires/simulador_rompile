@@ -5,7 +5,7 @@ import numpy as np
 # 1. Configuração e Estilo
 st.set_page_config(page_title="Otimizador de Blending Copelmi", layout="wide")
 
-st.title("⛏️ Otimizador de Blending - Pilha ROM")
+st.title("Otimizador de Blending - Pilha ROM")
 st.markdown("Determine os alvos da usina e deixe o sistema calcular a melhor composição de fundo.")
 
 # 2. Base de Dados das Camadas (Dicionário para facilitar exibição)
@@ -19,25 +19,25 @@ dados_frentes = {
 }
 
 # 3. Sidebar - Requisitos da Usina (Alvos)
-st.sidebar.header("🎯 Alvos de Qualidade (Usina)")
+st.sidebar.header("Alvos de Qualidade")
 alvo_massa = st.sidebar.number_input("Alvo Massa Total (t)", value=50000)
 alvo_vm = st.sidebar.slider("Alvo VM (%)", 18.0, 22.0, 19.5)
 alvo_ts = st.sidebar.slider("Alvo TS (%)", 0.5, 2.5, 1.35)
 alvo_cbs = st.sidebar.slider("Alvo CBS", 45.0, 60.0, 52.0)
 
 st.sidebar.markdown("---")
-st.sidebar.header("🕹️ Ajuste Manual")
+st.sidebar.header("Ajuste Manual")
 corte_S2 = st.sidebar.slider("S2 Manual (t)", 0, 26914, 2520)
 corte_CS = st.sidebar.slider("CS Manual (t)", 0, 36211, 10362)
 corte_CI = st.sidebar.slider("CI Manual (t)", 0, 55195, 9015)
 
 # 4. Exibição das Camadas Individuais
-st.subheader("📋 Parâmetros das Frentes de Lavra")
+st.subheader("Parâmetros das Frentes de Lavra")
 df_frentes = pd.DataFrame(dados_frentes).T
 st.table(df_frentes[['vm', 'ts', 'cbs', 'den']])
 
 # 5. Lógica de Otimização (Simples Heurística)
-if st.button("🚀 Calcular Melhor Distribuição para Alvos"):
+if st.button("Calcular Melhor Distribuição para Alvos"):
     # Aqui simulamos uma busca simples para fechar a massa alvo com melhor qualidade
     # Em um cenário real, usaríamos Scipy Optimize, mas para Streamlit Cloud,
     # uma busca iterativa rápida resolve o seu problema de blending.
