@@ -11,10 +11,10 @@ st.markdown("Determine os alvos da usina e deixe o sistema calcular a melhor com
 # 2. Base de Dados das Camadas (Dicionário para facilitar exibição)
 dados_frentes = {
     "S5 (Topo)": {"massa": 4138, "vm": 21.11, "ts": 0.70, "cbs": 51.31, "den": 1.70, "tipo": "Fixo"},
-    "S4 (Topo)": {"massa": 7926, "vm": 19.10, "ts": 0.94, "cbs": 58.13, "den": 1.80, "tipo": "Fixo"},
-    "S3 (Topo)": {"massa": 16039, "vm": 21.07, "ts": 2.09, "cbs": 47.63, "den": 1.60, "tipo": "Fixo"},
-    "S2 (Fundo)": {"massa_max": 26914, "vm": 22.37, "ts": 1.44, "cbs": 46.47, "den": 1.70, "tipo": "Variável"},
-    "CS (Fundo)": {"massa_max": 36211, "vm": 19.23, "ts": 1.43, "cbs": 51.86, "den": 1.70, "tipo": "Variável"},
+    "S4": {"massa": 7926, "vm": 19.10, "ts": 0.94, "cbs": 58.13, "den": 1.80, "tipo": "Fixo"},
+    "S3": {"massa": 16039, "vm": 21.07, "ts": 2.09, "cbs": 47.63, "den": 1.60, "tipo": "Fixo"},
+    "S2": {"massa_max": 26914, "vm": 22.37, "ts": 1.44, "cbs": 46.47, "den": 1.70, "tipo": "Variável"},
+    "CS": {"massa_max": 36211, "vm": 19.23, "ts": 1.43, "cbs": 51.86, "den": 1.70, "tipo": "Variável"},
     "CI (Fundo)": {"massa_max": 55195, "vm": 17.81, "ts": 1.14, "cbs": 59.73, "den": 1.70, "tipo": "Variável"}
 }
 
