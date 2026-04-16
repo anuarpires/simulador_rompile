@@ -8,7 +8,7 @@ from scipy.optimize import linprog
 # 1. CONFIGURAÇÃO DA PÁGINA E ESTILO
 # ==========================================
 st.set_page_config(page_title="Otimizador de Pilha ROM - Copelmi", layout="wide")
-st.title("⛏️ Otimizador Avançado de Blending - Pilha ROM")
+st.title("Otimizador Avançado de Blending - Pilha ROM")
 st.markdown("Motor de otimização por Programação Linear para maximizar o fechamento da pilha respeitando restrições.")
 
 # ==========================================
@@ -66,7 +66,7 @@ def longitudinal_trapezoid_volume(comp, larg, alt_max, angulo):
 # ==========================================
 # 3. INTERFACE DE USUÁRIO (Sidebar)
 # ==========================================
-st.sidebar.header("🎯 Parâmetros da Pilha")
+st.sidebar.header("Parâmetros da Pilha")
 alvo_massa = st.sidebar.number_input("Massa Alvo (t)", value=50000.0, step=1000.0)
 
 st.sidebar.header("📏 Geometria")
@@ -83,7 +83,7 @@ cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
 # ==========================================
 # 4. TABELA DE DADOS INTERATIVA
 # ==========================================
-st.subheader("📋 Inventário de Frentes de Lavra (Editável)")
+st.subheader("Inventário de Frentes de Lavra (Editável)")
 st.markdown("Altere os valores, adicione novas linhas ou exclua camadas diretamente na tabela abaixo. O otimizador usará os dados visíveis.")
 
 # Dados padrão baseados no seu histórico
@@ -105,7 +105,7 @@ df_valido = df_editado[df_editado['ton_report'] > 0].copy()
 # ==========================================
 # 5. BOTÃO DE OTIMIZAÇÃO
 # ==========================================
-if st.button("🚀 Rodar Solver de Otimização", type="primary"):
+if st.button("Rodar Solver de Otimização", type="primary"):
     if df_valido.empty:
         st.error("Nenhuma camada com tonelagem válida para otimizar.")
     else:
@@ -145,7 +145,7 @@ if st.button("🚀 Rodar Solver de Otimização", type="primary"):
                 # 6. EXIBIÇÃO DE RESULTADOS
                 # ==========================================
                 st.divider()
-                st.subheader("📊 Resultados de Qualidade")
+                st.subheader("Resultados de Qualidade")
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Massa Total", f"{massa_final:,.0f} t", delta=f"{massa_final - alvo_massa:,.0f} vs Alvo")
@@ -163,7 +163,7 @@ if st.button("🚀 Rodar Solver de Otimização", type="primary"):
                 col_tabela, col_grafico = st.columns([1.5, 1])
                 
                 with col_tabela:
-                    st.subheader("📐 Composição e Engenharia da Pilha")
+                    st.subheader("Composição e Engenharia da Pilha")
                     # Formata a tabela para ficar bonita
                     df_view = df_res[['camada', 'ton_calculada', 'volume_m3', 'espessura_m']].copy()
                     df_view.columns = ['Camada', 'Tonelagem (t)', 'Volume (m³)', 'Espessura (m)']
