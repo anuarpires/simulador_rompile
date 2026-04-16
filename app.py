@@ -75,7 +75,7 @@ larg_base = st.sidebar.number_input("Largura Base (m)", value=70.0)
 alt_max = st.sidebar.number_input("Altura Máxima (m)", value=5.0)
 angulo_rep = st.sidebar.number_input("Ângulo Repouso (Graus)", value=37.0)
 
-st.sidebar.header("⚖️ Restrições da Usina")
+st.sidebar.header("Restrições da Usina")
 vm_min = st.sidebar.number_input("VM Mínimo (%)", value=19.30)
 ts_max = st.sidebar.number_input("TS Máximo (%)", value=2.20)
 cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
