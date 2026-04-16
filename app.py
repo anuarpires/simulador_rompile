@@ -15,7 +15,7 @@ dados_frentes = {
     "S3": {"massa": 16039, "vm": 21.07, "ts": 2.09, "cbs": 47.63, "den": 1.60, "tipo": "Fixo"},
     "S2": {"massa_max": 26914, "vm": 22.37, "ts": 1.44, "cbs": 46.47, "den": 1.70, "tipo": "Variável"},
     "CS": {"massa_max": 36211, "vm": 19.23, "ts": 1.43, "cbs": 51.86, "den": 1.70, "tipo": "Variável"},
-    "CI" (Fundo)": {"massa_max": 55195, "vm": 17.81, "ts": 1.14, "cbs": 59.73, "den": 1.70, "tipo": "Variável"}
+    "CI (Fundo)": {"massa_max": 55195, "vm": 17.81, "ts": 1.14, "cbs": 59.73, "den": 1.70, "tipo": "Variável"}
 }
 
 # 3. Sidebar - Requisitos da Usina (Alvos)
