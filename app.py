@@ -12,7 +12,7 @@ st.title("⛏️ Otimizador Avançado de Blending - Pilha ROM")
 st.markdown("Motor de otimização por Programação Linear para maximizar o fechamento da pilha respeitando restrições.")
 
 # ==========================================
-# 2. FUNÇÕES MATEMÁTICAS E GEOMÉTRICAS (Motor do Colab)
+# 2. FUNÇÕES MATEMÁTICAS E GEOMÉTRICAS
 # ==========================================
 def build_linear_problem(df, specs, target_mass, volume_max_m3):
     n = len(df)
