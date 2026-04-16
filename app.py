@@ -1,94 +1,178 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+import math
+from scipy.optimize import linprog
 
-# 1. Configuração e Estilo
-st.set_page_config(page_title="Otimizador de Blending Copelmi", layout="wide")
+# ==========================================
+# 1. CONFIGURAÇÃO DA PÁGINA E ESTILO
+# ==========================================
+st.set_page_config(page_title="Otimizador de Pilha ROM - Copelmi", layout="wide")
+st.title("⛏️ Otimizador Avançado de Blending - Pilha ROM")
+st.markdown("Motor de otimização por Programação Linear para maximizar o fechamento da pilha respeitando restrições.")
 
-st.title("Otimizador de Blending - Pilha ROM")
-st.markdown("Determine os alvos da usina e deixe o sistema calcular a melhor composição de fundo.")
-
-# 2. Base de Dados das Camadas (Dicionário para facilitar exibição)
-dados_frentes = {
-    "S5 (Topo)": {"massa": 4138, "vm": 21.11, "ts": 0.70, "cbs": 51.31, "den": 1.70, "tipo": "Fixo"},
-    "S4": {"massa": 7926, "vm": 19.10, "ts": 0.94, "cbs": 58.13, "den": 1.80, "tipo": "Fixo"},
-    "S3": {"massa": 16039, "vm": 21.07, "ts": 2.09, "cbs": 47.63, "den": 1.60, "tipo": "Fixo"},
-    "S2": {"massa_max": 26914, "vm": 22.37, "ts": 1.44, "cbs": 46.47, "den": 1.70, "tipo": "Variável"},
-    "CS": {"massa_max": 36211, "vm": 19.23, "ts": 1.43, "cbs": 51.86, "den": 1.70, "tipo": "Variável"},
-    "CI (Fundo)": {"massa_max": 55195, "vm": 17.81, "ts": 1.14, "cbs": 59.73, "den": 1.70, "tipo": "Variável"}
-}
-
-# 3. Sidebar - Requisitos da Usina (Alvos)
-st.sidebar.header("Alvos de Qualidade")
-alvo_massa = st.sidebar.number_input("Alvo Massa Total (t)", value=50000)
-alvo_vm = st.sidebar.slider("Alvo VM (%)", 18.0, 22.0, 19.5)
-alvo_ts = st.sidebar.slider("Alvo TS (%)", 0.5, 2.5, 1.35)
-alvo_cbs = st.sidebar.slider("Alvo CBS", 45.0, 60.0, 52.0)
-
-st.sidebar.markdown("---")
-st.sidebar.header("Ajuste Manual")
-corte_S2 = st.sidebar.slider("S2 Manual (t)", 0, 26914, 2520)
-corte_CS = st.sidebar.slider("CS Manual (t)", 0, 36211, 10362)
-corte_CI = st.sidebar.slider("CI Manual (t)", 0, 55195, 9015)
-
-# 4. Exibição das Camadas Individuais
-st.subheader("Parâmetros das Frentes de Lavra")
-df_frentes = pd.DataFrame(dados_frentes).T
-st.table(df_frentes[['vm', 'ts', 'cbs', 'den']])
-
-# 5. Lógica de Otimização (Simples Heurística)
-if st.button("Calcular Melhor Distribuição para Alvos"):
-    # Aqui simulamos uma busca simples para fechar a massa alvo com melhor qualidade
-    # Em um cenário real, usaríamos Scipy Optimize, mas para Streamlit Cloud,
-    # uma busca iterativa rápida resolve o seu problema de blending.
+# ==========================================
+# 2. FUNÇÕES MATEMÁTICAS E GEOMÉTRICAS (Motor do Colab)
+# ==========================================
+def build_linear_problem(df, specs, target_mass, volume_max_m3):
+    n = len(df)
+    vm = df['vm'].to_numpy(dtype=float)
+    ts = df['ts'].to_numpy(dtype=float)
+    cinza = df['cinza'].to_numpy(dtype=float)
+    rho = df['densidade'].to_numpy(dtype=float)
     
-    massa_fixa = dados_frentes["S5 (Topo)"]["massa"] + dados_frentes["S4 (Topo)"]["massa"] + dados_frentes["S3 (Topo)"]["massa"]
-    falta_massa = alvo_massa - m_fixa
+    # Limites (0 até a massa disponível da frente)
+    bounds = [(0.0, float(row['ton_report'])) for _, row in df.iterrows()]
     
-    # Exemplo de lógica proporcional para atingir os alvos (pode ser refinada)
-    # Aqui o sistema "sugere" uma divisão que balanceia TS e VM
-    corte_S2 = min(26914, falta_massa * 0.15)
-    corte_CS = min(36211, falta_massa * 0.40)
-    corte_CI = min(55195, falta_massa * 0.45)
-    st.success("Distribuição Calculada com Sucesso!")
+    A_ub, b_ub = [], []
+    A_eq, b_eq = [], []
+    
+    # Restrição de Massa Alvo (Exata)
+    A_eq.append(np.ones(n))
+    b_eq.append(float(target_mass))
+    
+    # Restrições de Qualidade (Máximos e Mínimos)
+    if specs.get('ts_max') is not None:
+        A_ub.append(ts - float(specs['ts_max']))
+        b_ub.append(0.0)
+    if specs.get('cinza_max') is not None:
+        A_ub.append(cinza - float(specs['cinza_max']))
+        b_ub.append(0.0)
+    if specs.get('vm_min') is not None:
+        A_ub.append(float(specs['vm_min']) - vm)
+        b_ub.append(0.0)
+        
+    # Restrição de Volume Geométrico
+    if volume_max_m3 is not None:
+        A_ub.append(1.0 / rho)
+        b_ub.append(float(volume_max_m3))
+        
+    # Objetivo: Minimizar a diferença da média ideal (Balanced)
+    def zscore(x):
+        s = x.std()
+        return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
+        
+    c = (-1.0 * zscore(vm) + 1.0 * zscore(ts) + 1.0 * zscore(cinza))
+    
+    return c, A_ub, b_ub, A_eq, b_eq, bounds
 
-# 6. Cálculos Finais
-m_S5, m_S4, m_S3 = dados_frentes["S5 (Topo)"]["massa"], dados_frentes["S4 (Topo)"]["massa"], dados_frentes["S3 (Topo)"]["massa"]
-ton_total = m_S5 + m_S4 + m_S3 + corte_S2 + corte_CS + corte_CI
+def longitudinal_trapezoid_volume(comp, larg, alt_max, angulo):
+    tanv = math.tan(math.radians(angulo))
+    retracao_lateral = alt_max / tanv
+    largura_topo = max(0.0, larg - 2.0 * retracao_lateral)
+    area_secao = alt_max * (larg + largura_topo) / 2.0
+    return comp * area_secao
 
-vm_f = ((m_S5*21.11) + (m_S4*19.10) + (m_S3*21.07) + (corte_S2*22.37) + (corte_CS*19.23) + (corte_CI*17.81)) / ton_total
-ts_f = ((m_S5*0.70) + (m_S4*0.94) + (m_S3*2.09) + (corte_S2*1.44) + (corte_CS*1.43) + (corte_CI*1.14)) / ton_total
-cbs_f = ((m_S5*51.31) + (m_S4*58.13) + (m_S3*47.63) + (corte_S2*46.47) + (corte_CS*51.86) + (corte_CI*59.73)) / ton_total
+# ==========================================
+# 3. INTERFACE DE USUÁRIO (Sidebar)
+# ==========================================
+st.sidebar.header("🎯 Parâmetros da Pilha")
+alvo_massa = st.sidebar.number_input("Massa Alvo (t)", value=50000.0, step=1000.0)
 
-# 7. Exibição de Resultados
-st.divider()
-st.subheader("📊 Resultado do Blending")
-c1, c2, c3, c4 = st.columns(4)
-c1.metric("Massa Total", f"{ton_total:,.0f} t", delta=f"{ton_total - alvo_massa:,.0f} vs Alvo")
-c2.metric("VM Final", f"{vm_f:.2f}%")
-c3.metric("TS Final", f"{ts_f:.2f}%")
-c4.metric("CBS Final", f"{cbs_f:.2f}")
+st.sidebar.header("📏 Geometria")
+comp_base = st.sidebar.number_input("Comprimento Base (m)", value=120.0)
+larg_base = st.sidebar.number_input("Largura Base (m)", value=70.0)
+alt_max = st.sidebar.number_input("Altura Máxima (m)", value=5.0)
+angulo_rep = st.sidebar.number_input("Ângulo Repouso (Graus)", value=37.0)
 
-# 8. Composição Física da Pilha Recomendada
-st.subheader("📐 Geometria e Composição da Pilha")
-largura = 40 # m (exemplo)
-comprimento = 210 # m (exemplo)
-area = largura * comprimento
+st.sidebar.header("⚖️ Restrições da Usina")
+vm_min = st.sidebar.number_input("VM Mínimo (%)", value=19.30)
+ts_max = st.sidebar.number_input("TS Máximo (%)", value=2.20)
+cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
 
-# Tabela de Composição
-comp_data = {
-    "Camada": ["S5 (Topo)", "S4", "S3", "S2", "CS", "CI (Base)"],
-    "Tonelagem (t)": [m_S5, m_S4, m_S3, corte_S2, corte_CS, corte_CI],
-    "Densidade": [1.70, 1.80, 1.60, 1.70, 1.70, 1.70],
-}
-df_comp = pd.DataFrame(comp_data)
-df_comp["Volume (m³)"] = df_comp["Tonelagem (t)"] / df_comp["Densidade"]
-df_comp["Espessura (m)"] = df_comp["Volume (m³)"] / area
+# ==========================================
+# 4. TABELA DE DADOS INTERATIVA
+# ==========================================
+st.subheader("📋 Inventário de Frentes de Lavra (Editável)")
+st.markdown("Altere os valores, adicione novas linhas ou exclua camadas diretamente na tabela abaixo. O otimizador usará os dados visíveis.")
 
-st.dataframe(df_comp.style.format({
-    "Tonelagem (t)": "{:,.0f}",
-    "Volume (m³)": "{:,.0f}",
-    "Espessura (m)": "{:.2f}"
-}))
+# Dados padrão baseados no seu histórico
+dados_iniciais = pd.DataFrame({
+    "camada": ["S6", "S5", "S4", "S3", "S2", "CS", "CI"],
+    "ton_report": [0.0, 4138.0, 7926.0, 16039.0, 26914.0, 36211.0, 55195.0],
+    "vm": [20.00, 21.11, 19.10, 21.07, 22.37, 19.23, 17.81],
+    "ts": [1.50, 0.70, 0.94, 2.09, 1.44, 1.43, 1.14],
+    "cinza": [50.00, 51.31, 58.13, 47.63, 46.47, 51.86, 59.73],
+    "densidade": [1.60, 1.70, 1.80, 1.60, 1.70, 1.70, 1.70]
+})
 
-st.info(f"Dimensões Estimadas: {largura}m largura x {comprimento}m comprimento. Altura Total: {df_comp['Espessura (m)'].sum():.2f} m")
+# Tabela editável pelo usuário (substitui o CSV)
+df_editado = st.data_editor(dados_iniciais, num_rows="dynamic", use_container_width=True)
+
+# Filtra apenas linhas com toneladas > 0
+df_valido = df_editado[df_editado['ton_report'] > 0].copy()
+
+# ==========================================
+# 5. BOTÃO DE OTIMIZAÇÃO
+# ==========================================
+if st.button("🚀 Rodar Solver de Otimização", type="primary"):
+    if df_valido.empty:
+        st.error("Nenhuma camada com tonelagem válida para otimizar.")
+    else:
+        try:
+            # 5.1 Calcula o limite de volume da pilha
+            vol_max = longitudinal_trapezoid_volume(comp_base, larg_base, alt_max, angulo_rep)
+            
+            # 5.2 Prepara os parâmetros
+            specs = {'vm_min': vm_min, 'ts_max': ts_max, 'cinza_max': cinza_max}
+            c, A_ub, b_ub, A_eq, b_eq, bounds = build_linear_problem(df_valido, specs, alvo_massa, vol_max)
+            
+            # 5.3 Executa o Simplex (Scipy Linprog)
+            res = linprog(c, A_ub=A_ub if A_ub else None, b_ub=b_ub if b_ub else None, 
+                          A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
+            
+            if not res.success:
+                st.error(f"❌ O Solver não encontrou uma solução viável matemática para essas restrições: {res.message}")
+            else:
+                st.success("✅ Solução Otimizada Encontrada!")
+                
+                # 5.4 Processa os resultados
+                df_valido['ton_calculada'] = res.x
+                df_res = df_valido[df_valido['ton_calculada'] > 1e-6].copy()
+                
+                # Média Ponderada Final
+                massa_final = df_res['ton_calculada'].sum()
+                vm_final = np.average(df_res['vm'], weights=df_res['ton_calculada'])
+                ts_final = np.average(df_res['ts'], weights=df_res['ton_calculada'])
+                cinza_final = np.average(df_res['cinza'], weights=df_res['ton_calculada'])
+                
+                # Geometria e Espessuras
+                area_base = comp_base * larg_base
+                df_res['volume_m3'] = df_res['ton_calculada'] / df_res['densidade']
+                df_res['espessura_m'] = df_res['volume_m3'] / area_base
+                
+                # ==========================================
+                # 6. EXIBIÇÃO DE RESULTADOS
+                # ==========================================
+                st.divider()
+                st.subheader("📊 Resultados de Qualidade")
+                
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Massa Total", f"{massa_final:,.0f} t", delta=f"{massa_final - alvo_massa:,.0f} vs Alvo")
+                
+                cor_vm = "normal" if vm_final >= vm_min else "inverse"
+                c2.metric("VM Final", f"{vm_final:.2f}%", delta=f"Mínimo: {vm_min}", delta_color=cor_vm)
+                
+                cor_ts = "normal" if ts_final <= ts_max else "inverse"
+                c3.metric("TS Final", f"{ts_final:.2f}%", delta=f"Máximo: {ts_max}", delta_color=cor_ts)
+                
+                cor_cz = "normal" if cinza_final <= cinza_max else "inverse"
+                c4.metric("Cinza/CBS Final", f"{cinza_final:.2f}", delta=f"Máximo: {cinza_max}", delta_color=cor_cz)
+                
+                st.divider()
+                col_tabela, col_grafico = st.columns([1.5, 1])
+                
+                with col_tabela:
+                    st.subheader("📐 Composição e Engenharia da Pilha")
+                    # Formata a tabela para ficar bonita
+                    df_view = df_res[['camada', 'ton_calculada', 'volume_m3', 'espessura_m']].copy()
+                    df_view.columns = ['Camada', 'Tonelagem (t)', 'Volume (m³)', 'Espessura (m)']
+                    st.dataframe(df_view.style.format({'Tonelagem (t)': '{:,.0f}', 'Volume (m³)': '{:,.0f}', 'Espessura (m)': '{:.2f}'}), use_container_width=True)
+                    st.info(f"**Volume Total:** {df_res['volume_m3'].sum():,.0f} m³ (Máx Suportado: {vol_max:,.0f} m³)")
+                
+                with col_grafico:
+                    st.subheader("Visão das Camadas")
+                    st.bar_chart(df_res.set_index('camada')['espessura_m'], use_container_width=True)
+
+        except Exception as e:
+            st.error(f"Erro na execução matemática: {e}")
