@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import math
 from scipy.optimize import linprog
+import plotly.graph_objects as go
 
 # ==========================================
 # 1. CONFIGURAÇÃO DA PÁGINA E ESTILO
@@ -21,17 +22,14 @@ def build_linear_problem(df, specs, target_mass, volume_max_m3):
     cinza = df['cinza'].to_numpy(dtype=float)
     rho = df['densidade'].to_numpy(dtype=float)
     
-    # Limites (0 até a massa disponível da frente)
     bounds = [(0.0, float(row['ton_report'])) for _, row in df.iterrows()]
     
     A_ub, b_ub = [], []
     A_eq, b_eq = [], []
     
-    # Restrição de Massa Alvo (Exata)
     A_eq.append(np.ones(n))
     b_eq.append(float(target_mass))
     
-    # Restrições de Qualidade (Máximos e Mínimos)
     if specs.get('ts_max') is not None:
         A_ub.append(ts - float(specs['ts_max']))
         b_ub.append(0.0)
@@ -42,12 +40,10 @@ def build_linear_problem(df, specs, target_mass, volume_max_m3):
         A_ub.append(float(specs['vm_min']) - vm)
         b_ub.append(0.0)
         
-    # Restrição de Volume Geométrico
     if volume_max_m3 is not None:
         A_ub.append(1.0 / rho)
         b_ub.append(float(volume_max_m3))
         
-    # Objetivo: Minimizar a diferença da média ideal (Balanced)
     def zscore(x):
         s = x.std()
         return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
@@ -84,9 +80,6 @@ cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
 # 4. TABELA DE DADOS INTERATIVA
 # ==========================================
 st.subheader("Inventário de Frentes de Lavra (Editável)")
-st.markdown("Altere os valores, adicione novas linhas ou exclua camadas diretamente na tabela abaixo. O otimizador usará os dados visíveis.")
-
-# Dados padrão baseados no seu histórico
 dados_iniciais = pd.DataFrame({
     "camada": ["S6", "S5", "S4", "S3", "S2", "CS", "CI"],
     "ton_report": [0.0, 4138.0, 7926.0, 16039.0, 26914.0, 36211.0, 55195.0],
@@ -96,10 +89,7 @@ dados_iniciais = pd.DataFrame({
     "densidade": [1.60, 1.70, 1.80, 1.60, 1.70, 1.70, 1.70]
 })
 
-# Tabela editável pelo usuário (substitui o CSV)
 df_editado = st.data_editor(dados_iniciais, num_rows="dynamic", use_container_width=True)
-
-# Filtra apenas linhas com toneladas > 0
 df_valido = df_editado[df_editado['ton_report'] > 0].copy()
 
 # ==========================================
@@ -110,14 +100,10 @@ if st.button("Rodar Solver de Otimização", type="primary"):
         st.error("Nenhuma camada com tonelagem válida para otimizar.")
     else:
         try:
-            # 5.1 Calcula o limite de volume da pilha
             vol_max = longitudinal_trapezoid_volume(comp_base, larg_base, alt_max, angulo_rep)
-            
-            # 5.2 Prepara os parâmetros
             specs = {'vm_min': vm_min, 'ts_max': ts_max, 'cinza_max': cinza_max}
             c, A_ub, b_ub, A_eq, b_eq, bounds = build_linear_problem(df_valido, specs, alvo_massa, vol_max)
             
-            # 5.3 Executa o Simplex (Scipy Linprog)
             res = linprog(c, A_ub=A_ub if A_ub else None, b_ub=b_ub if b_ub else None, 
                           A_eq=A_eq, b_eq=b_eq, bounds=bounds, method='highs')
             
@@ -126,53 +112,97 @@ if st.button("Rodar Solver de Otimização", type="primary"):
             else:
                 st.success("✅ Solução Otimizada Encontrada!")
                 
-                # 5.4 Processa os resultados
                 df_valido['ton_calculada'] = res.x
                 df_res = df_valido[df_valido['ton_calculada'] > 1e-6].copy()
                 
-                # Média Ponderada Final
                 massa_final = df_res['ton_calculada'].sum()
                 vm_final = np.average(df_res['vm'], weights=df_res['ton_calculada'])
                 ts_final = np.average(df_res['ts'], weights=df_res['ton_calculada'])
                 cinza_final = np.average(df_res['cinza'], weights=df_res['ton_calculada'])
                 
-                # Geometria e Espessuras
                 area_base = comp_base * larg_base
                 df_res['volume_m3'] = df_res['ton_calculada'] / df_res['densidade']
                 df_res['espessura_m'] = df_res['volume_m3'] / area_base
                 
-                # ==========================================
-                # 6. EXIBIÇÃO DE RESULTADOS
-                # ==========================================
                 st.divider()
-                st.subheader("Resultados de Qualidade")
+                st.subheader("📊 Resultados de Qualidade")
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Massa Total", f"{massa_final:,.0f} t", delta=f"{massa_final - alvo_massa:,.0f} vs Alvo")
-                
                 cor_vm = "normal" if vm_final >= vm_min else "inverse"
                 c2.metric("VM Final", f"{vm_final:.2f}%", delta=f"Mínimo: {vm_min}", delta_color=cor_vm)
-                
                 cor_ts = "normal" if ts_final <= ts_max else "inverse"
                 c3.metric("TS Final", f"{ts_final:.2f}%", delta=f"Máximo: {ts_max}", delta_color=cor_ts)
-                
                 cor_cz = "normal" if cinza_final <= cinza_max else "inverse"
                 c4.metric("Cinza/CBS Final", f"{cinza_final:.2f}", delta=f"Máximo: {cinza_max}", delta_color=cor_cz)
                 
                 st.divider()
-                col_tabela, col_grafico = st.columns([1.5, 1])
+                st.subheader("📐 Composição e Geometria da Pilha")
                 
+                col_tabela, col_grafico = st.columns([1, 1.2])
+                
+                # --- TABELA DE ENGENHARIA ---
                 with col_tabela:
-                    st.subheader("Composição e Engenharia da Pilha")
-                    # Formata a tabela para ficar bonita
                     df_view = df_res[['camada', 'ton_calculada', 'volume_m3', 'espessura_m']].copy()
                     df_view.columns = ['Camada', 'Tonelagem (t)', 'Volume (m³)', 'Espessura (m)']
                     st.dataframe(df_view.style.format({'Tonelagem (t)': '{:,.0f}', 'Volume (m³)': '{:,.0f}', 'Espessura (m)': '{:.2f}'}), use_container_width=True)
-                    st.info(f"**Volume Total:** {df_res['volume_m3'].sum():,.0f} m³ (Máx Suportado: {vol_max:,.0f} m³)")
+                    st.info(f"**Geometria Projetada:** Base de {larg_base}m x {comp_base}m. \n\n**Altura Total Calculada:** {df_res['espessura_m'].sum():.2f}m")
                 
+                # --- GRÁFICO DA PILHA (SEÇÃO TRANSVERSAL) ---
                 with col_grafico:
-                    st.subheader("Visão das Camadas")
-                    st.bar_chart(df_res.set_index('camada')['espessura_m'], use_container_width=True)
+                    # Ordenar as camadas para desenhar de baixo para cima
+                    ordem_construcao = {'CI': 1, 'CS': 2, 'S2': 3, 'S3': 4, 'S4': 5, 'S5': 6, 'S6': 7}
+                    df_res['ordem_plot'] = df_res['camada'].map(ordem_construcao).fillna(99)
+                    df_plot = df_res.sort_values('ordem_plot')
+
+                    fig = go.Figure()
+                    
+                    y_atual = 0.0
+                    largura_atual = larg_base
+                    tan_alpha = math.tan(math.radians(angulo_rep))
+                    
+                    cores = ['#2E4053', '#839192', '#E67E22', '#D4AC0D', '#27AE60', '#2980B9', '#8E44AD']
+
+                    # Desenha trapézio por trapézio empilhando as camadas
+                    for i, row in df_plot.iterrows():
+                        camada = row['camada']
+                        espessura = row['espessura_m']
+                        
+                        y_topo = y_atual + espessura
+                        # Calcula a largura do topo da camada atual (diminui devido ao ângulo de repouso)
+                        largura_topo = max(0.0, largura_atual - 2 * (espessura / tan_alpha))
+                        
+                        # Coordenadas do polígono (trapézio)
+                        x_coords = [-largura_atual/2, largura_atual/2, largura_topo/2, -largura_topo/2, -largura_atual/2]
+                        y_coords = [y_atual, y_atual, y_topo, y_topo, y_atual]
+                        
+                        cor = cores[int(row['ordem_plot'])-1] if int(row['ordem_plot'])-1 < len(cores) else '#555555'
+                        
+                        fig.add_trace(go.Scatter(
+                            x=x_coords, y=y_coords, fill='toself', name=f"{camada} ({espessura:.2f}m)",
+                            mode='lines', line=dict(color='white', width=1), fillcolor=cor,
+                            text=f"Camada: {camada}<br>Espessura: {espessura:.2f}m<br>Massa: {row['ton_calculada']:,.0f}t",
+                            hoverinfo="text"
+                        ))
+                        
+                        y_atual = y_topo
+                        largura_atual = largura_topo
+
+                    # Desenha o limite da altura máxima permitida
+                    fig.add_hline(y=alt_max, line_dash="dash", line_color="red", annotation_text="Altura Máx")
+
+                    fig.update_layout(
+                        title="Seção Transversal da Pilha Calculada",
+                        xaxis_title="Largura da Pilha (m)",
+                        yaxis_title="Altura (m)",
+                        yaxis=dict(range=[0, alt_max + 1]),
+                        xaxis=dict(range=[-larg_base/2 - 2, larg_base/2 + 2]),
+                        margin=dict(l=20, r=20, t=40, b=20),
+                        template="plotly_white",
+                        hovermode="x unified"
+                    )
+                    
+                    st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
             st.error(f"Erro na execução matemática: {e}")
