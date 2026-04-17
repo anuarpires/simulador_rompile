@@ -65,7 +65,7 @@ def longitudinal_trapezoid_volume(comp, larg, alt_max, angulo):
 st.sidebar.header("Parâmetros da Pilha")
 alvo_massa = st.sidebar.number_input("Massa Alvo (t)", value=50000.0, step=1000.0)
 
-st.sidebar.header("📏 Geometria")
+st.sidebar.header("Geometria")
 comp_base = st.sidebar.number_input("Comprimento Base (m)", value=120.0)
 larg_base = st.sidebar.number_input("Largura Base (m)", value=70.0)
 alt_max = st.sidebar.number_input("Altura Máxima (m)", value=5.0)
