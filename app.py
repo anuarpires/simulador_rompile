@@ -1,14 +1,11 @@
 
 import math
-from io import BytesIO
-import zipfile
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from scipy.optimize import linprog
-
 
 # ============================================================
 # 1) CONFIGURAÇÃO GERAL DA APLICAÇÃO
@@ -45,7 +42,6 @@ CORES_CAMADAS = {
     "S6": "#8E44AD",
 }
 
-
 # ============================================================
 # 2) FUNÇÕES MATEMÁTICAS DO BLEND
 # ============================================================
@@ -56,7 +52,6 @@ def zscore(x: np.ndarray) -> np.ndarray:
     """
     s = x.std()
     return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
-
 
 def build_linear_problem(df: pd.DataFrame, specs: dict, target_mass: float, volume_max_m3: float | None):
     """
@@ -117,7 +112,6 @@ def build_linear_problem(df: pd.DataFrame, specs: dict, target_mass: float, volu
     c = (-1.0 * zscore(vm) + 1.0 * zscore(ts) + 1.0 * zscore(cinza))
     return c, A_ub, b_ub, A_eq, b_eq, bounds
 
-
 def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
     """
     Calcula as propriedades médias ponderadas e o volume total do blend final.
@@ -138,7 +132,6 @@ def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
         "rho_aparente": rho_aparente,
     }
 
-
 def enrich_total_composition(df_res: pd.DataFrame, metrics: dict) -> pd.DataFrame:
     """
     Monta a composição total enriquecida com volume e frações de massa/volume.
@@ -149,7 +142,6 @@ def enrich_total_composition(df_res: pd.DataFrame, metrics: dict) -> pd.DataFram
     df_total["frac_volume_%"] = 100.0 * df_total["volume_m3"] / metrics["volume_total"]
     df_total["ordem_plot"] = df_total["camada"].map(ORDEM_CONSTRUCAO).fillna(99)
     return df_total.sort_values("ordem_plot").reset_index(drop=True)
-
 
 # ============================================================
 # 3) FUNÇÕES GEOMÉTRICAS DO INVÓLUCRO DA PILHA
@@ -164,7 +156,6 @@ def width_at_height(y: float, larg_base: float, angulo: float) -> float:
         return larg_base
     return max(0.0, larg_base - 2.0 * (y / tanv))
 
-
 def cross_section_area_up_to(h: float, larg_base: float, angulo: float) -> float:
     """
     Área acumulada da seção transversal desde a base até a altura h.
@@ -173,13 +164,11 @@ def cross_section_area_up_to(h: float, larg_base: float, angulo: float) -> float
     largura_topo = width_at_height(h, larg_base, angulo)
     return h * (larg_base + largura_topo) / 2.0
 
-
 def longitudinal_trapezoid_volume(comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
     """
     Volume máximo do invólucro longitudinal trapezoidal.
     """
     return comp * cross_section_area_up_to(alt_max, larg_base, angulo)
-
 
 def volume_between_heights(y0: float, y1: float, comp: float, larg_base: float, angulo: float) -> float:
     """
@@ -188,7 +177,6 @@ def volume_between_heights(y0: float, y1: float, comp: float, larg_base: float, 
     y0 = max(0.0, y0)
     y1 = max(y0, y1)
     return comp * (cross_section_area_up_to(y1, larg_base, angulo) - cross_section_area_up_to(y0, larg_base, angulo))
-
 
 def solve_height_for_volume(volume_target: float, comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
     """
@@ -210,7 +198,6 @@ def solve_height_for_volume(volume_target: float, comp: float, larg_base: float,
         else:
             hi = mid
     return (lo + hi) / 2.0
-
 
 def solve_upper_height_for_segment_volume(
     y_base: float,
@@ -241,7 +228,6 @@ def solve_upper_height_for_segment_volume(
         else:
             hi = mid
     return (lo + hi) / 2.0
-
 
 # ============================================================
 # 4) PILHA A - ESTRATOS POR CAMADA
@@ -304,7 +290,6 @@ def prepare_pile_a_strata(
         "df_camadas": df_camadas,
         "altura_efetiva_m": altura_efetiva,
     }
-
 
 # ============================================================
 # 5) PILHA B - LIFT / SUBLIFTING
@@ -428,7 +413,6 @@ def prepare_pile_b_lifts(
         "altura_efetiva_m": altura_efetiva,
     }
 
-
 # ============================================================
 # 6) FUNÇÕES DE VISUALIZAÇÃO GRÁFICA
 # ============================================================
@@ -492,7 +476,6 @@ def build_pile_a_figure(df_camadas: pd.DataFrame, larg_base: float, alt_max: flo
         hovermode="closest",
     )
     return fig
-
 
 def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_rep: float) -> go.Figure:
     """
@@ -599,193 +582,6 @@ def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_re
     )
     return fig
 
-
-# ============================================================
-# 7) FUNÇÕES DE EXPORTAÇÃO EXCEL
-# ============================================================
-def build_excel_bytes_safe(sheets: dict) -> tuple[bytes | None, str | None]:
-    """
-    Gera um arquivo Excel tentando engines opcionais.
-    Se nenhuma estiver disponível, retorna None para não quebrar a interface.
-    """
-    engines = ["xlsxwriter", "openpyxl"]
-    last_error = None
-
-    for engine in engines:
-        try:
-            xlsx_buffer = BytesIO()
-
-            # Abre o writer do Excel com a engine disponível.
-            with pd.ExcelWriter(xlsx_buffer, engine=engine) as writer:
-                for sheet_name, df_sheet in sheets.items():
-                    safe_name = sheet_name[:31]
-                    df_sheet.to_excel(writer, index=False, sheet_name=safe_name)
-
-                    # Ajustes cosméticos para facilitar a leitura do arquivo exportado.
-                    if engine == "xlsxwriter":
-                        ws = writer.sheets[safe_name]
-                        ws.freeze_panes(1, 0)
-                        for idx, col in enumerate(df_sheet.columns):
-                            max_len = max([len(str(col))] + [len(str(v)) if v is not None else 0 for v in df_sheet[col].tolist()])
-                            ws.set_column(idx, idx, min(max(max_len + 2, 12), 28))
-                    elif engine == "openpyxl":
-                        ws = writer.book[safe_name]
-                        ws.freeze_panes = "A2"
-                        for col_cells in ws.columns:
-                            max_len = max(len(str(cell.value)) if cell.value is not None else 0 for cell in col_cells)
-                            ws.column_dimensions[col_cells[0].column_letter].width = min(max(max_len + 2, 12), 28)
-
-            return xlsx_buffer.getvalue(), engine
-
-        except ModuleNotFoundError as e:
-            last_error = str(e)
-        except ImportError as e:
-            last_error = str(e)
-        except Exception as e:
-            last_error = f"{type(e).__name__}: {e}"
-
-    return None, last_error
-
-
-def build_csv_zip_bytes(sheets: dict) -> bytes:
-    """
-    Gera um arquivo ZIP contendo um CSV para cada tabela de saída.
-    Esse caminho independe de engines de Excel e funciona como fallback robusto.
-    """
-    zip_buffer = BytesIO()
-
-    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
-        for sheet_name, df_sheet in sheets.items():
-            csv_name = f"{sheet_name}.csv"
-            csv_bytes = df_sheet.to_csv(index=False).encode("utf-8-sig")
-            zf.writestr(csv_name, csv_bytes)
-
-    return zip_buffer.getvalue()
-
-
-def build_export_workbook(
-    *,
-    modo_selecionado: str,
-    params: dict,
-    metrics: dict,
-    df_total: pd.DataFrame,
-    pile_a: dict,
-    pile_b: dict,
-) -> dict:
-    """
-    Monta todas as abas do Excel contendo as informações das duas pilhas.
-    Também monta um ZIP com CSVs para exportação sem dependência de engine externa.
-    """
-    df_resumo = pd.DataFrame(
-        [
-            {"item": "Modo exibido na tela", "valor": modo_selecionado},
-            {"item": "Massa alvo (t)", "valor": params["alvo_massa"]},
-            {"item": "Massa final (t)", "valor": metrics["massa_final"]},
-            {"item": "VM final (%)", "valor": metrics["vm_final"]},
-            {"item": "TS final (%)", "valor": metrics["ts_final"]},
-            {"item": "Cinza/CBS final", "valor": metrics["cinza_final"]},
-            {"item": "Volume usado (m3)", "valor": metrics["volume_total"]},
-            {"item": "Densidade aparente equivalente (t/m3)", "valor": metrics["rho_aparente"]},
-            {"item": "Comprimento base (m)", "valor": params["comp_base"]},
-            {"item": "Largura base (m)", "valor": params["larg_base"]},
-            {"item": "Altura máxima do pátio (m)", "valor": params["alt_max"]},
-            {"item": "Ângulo de repouso (graus)", "valor": params["angulo_rep"]},
-            {"item": "Volume máximo do pátio (m3)", "valor": params["vol_max"]},
-            {"item": "VM mínimo especificado (%)", "valor": params["vm_min"]},
-            {"item": "TS máximo especificado (%)", "valor": params["ts_max"]},
-            {"item": "Cinza/CBS máximo especificado", "valor": params["cinza_max"]},
-            {"item": "Altura ocupada Pilha A (m)", "valor": pile_a["altura_efetiva_m"]},
-            {"item": "Altura ocupada Pilha B (m)", "valor": pile_b["altura_efetiva_m"]},
-            {"item": "Altura de lift (m)", "valor": params["altura_lift"]},
-            {"item": "Altura de sublift (m)", "valor": params["altura_sublift"]},
-        ]
-    )
-
-    # Seleciona as colunas principais da composição total.
-    df_total_export = df_total[["camada", "ton_calculada", "volume_m3", "frac_massa_%", "frac_volume_%"]].copy()
-
-    # Seleciona as colunas da Pilha A.
-    df_a = pile_a["df_camadas"].copy()
-
-    # Seleciona as colunas principais dos lifts e sublifts da Pilha B.
-    df_b_lifts = pile_b["df_lifts"].copy()
-    df_b_sublifts = pile_b["df_sublifts"].copy()
-
-    sheets = {
-        "resumo_geral": df_resumo,
-        "composicao_total": df_total_export,
-        "pilha_A_estratos": df_a,
-        "pilha_B_lifts": df_b_lifts,
-        "pilha_B_sublifts": df_b_sublifts,
-    }
-
-    xlsx_bytes, xlsx_status = build_excel_bytes_safe(sheets)
-    csv_zip_bytes = build_csv_zip_bytes(sheets)
-    return {
-        "xlsx_bytes": xlsx_bytes,
-        "xlsx_status": xlsx_status,
-        "csv_zip_bytes": csv_zip_bytes,
-        "sheets": sheets,
-    }
-
-
-def render_excel_download(export_bundle: dict):
-    """
-    Exibe os botões finais de download.
-    Primeiro tenta Excel; em paralelo sempre oferece CSV/ZIP como alternativa.
-    """
-    st.divider()
-    st.subheader("Output dos Resultados")
-
-    # --------------------------------------------
-    # Bloco 1: Exportação em Excel, quando disponível
-    # --------------------------------------------
-    if export_bundle.get("xlsx_bytes") is not None:
-        st.download_button(
-            label="Baixar Excel com informações completas da Pilha A e da Pilha B",
-            data=export_bundle["xlsx_bytes"],
-            file_name="pilhas_rom_casos_A_e_B.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True,
-        )
-        st.caption(f"Engine de exportação utilizada: {export_bundle.get('xlsx_status')}")
-    else:
-        st.warning("A exportação Excel não está disponível neste ambiente.")
-        if export_bundle.get("xlsx_status"):
-            st.caption(f"Detalhe técnico: {export_bundle.get('xlsx_status')}")
-
-    # --------------------------------------------
-    # Bloco 2: Exportação alternativa em ZIP com todos os CSVs
-    # --------------------------------------------
-    st.download_button(
-        label="Baixar ZIP com todos os CSVs das Pilhas A e B",
-        data=export_bundle["csv_zip_bytes"],
-        file_name="pilhas_rom_casos_A_e_B_csv.zip",
-        mime="application/zip",
-        use_container_width=True,
-    )
-
-    # --------------------------------------------
-    # Bloco 3: Exportação individual por tabela em CSV
-    # --------------------------------------------
-    st.markdown("**Downloads individuais em CSV**")
-    nomes_tabelas = list(export_bundle["sheets"].keys())
-    tabela_csv = st.selectbox(
-        "Escolha a tabela para baixar em CSV",
-        options=nomes_tabelas,
-        key="csv_sheet_selector",
-    )
-    df_csv = export_bundle["sheets"][tabela_csv]
-
-    st.download_button(
-        label=f"Baixar CSV da tabela: {tabela_csv}",
-        data=df_csv.to_csv(index=False).encode("utf-8-sig"),
-        file_name=f"{tabela_csv}.csv",
-        mime="text/csv",
-        use_container_width=True,
-    )
-
-
 # ============================================================
 # 8) SIDEBAR - PARÂMETROS DE ENTRADA
 # ============================================================
@@ -823,7 +619,6 @@ vm_min = st.sidebar.number_input("VM Mínimo (%)", value=19.30)
 ts_max = st.sidebar.number_input("TS Máximo (%)", value=2.20)
 cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
 
-
 # ============================================================
 # 9) TABELA DE DADOS EDITÁVEL
 # ============================================================
@@ -844,7 +639,6 @@ dados_iniciais = pd.DataFrame(
 # Permite que o usuário edite os dados diretamente na página.
 df_editado = st.data_editor(dados_iniciais, num_rows="dynamic", use_container_width=True)
 df_valido = df_editado[df_editado["ton_report"] > 0].copy()
-
 
 # ============================================================
 # 10) EXECUÇÃO DO SOLVER E APRESENTAÇÃO DOS RESULTADOS
@@ -1056,31 +850,6 @@ if st.button("Rodar Solver de Otimização", type="primary"):
 
                     st.plotly_chart(fig, use_container_width=True)
 
-                # -----------------------------
-                # BLOCO DE EXPORTAÇÃO EXCEL
-                # -----------------------------
-                export_bundle = build_export_workbook(
-                    modo_selecionado=modo_construtivo,
-                    params={
-                        "alvo_massa": alvo_massa,
-                        "comp_base": comp_base,
-                        "larg_base": larg_base,
-                        "alt_max": alt_max,
-                        "angulo_rep": angulo_rep,
-                        "vm_min": vm_min,
-                        "ts_max": ts_max,
-                        "cinza_max": cinza_max,
-                        "vol_max": vol_max,
-                        "altura_lift": altura_lift,
-                        "altura_sublift": altura_sublift,
-                    },
-                    metrics=metrics,
-                    df_total=df_total,
-                    pile_a=pile_a,
-                    pile_b=pile_b,
-                )
-
-                render_excel_download(export_bundle)
 
         except Exception as e:
             st.error(f"Erro na execução matemática: {e}")
