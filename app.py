@@ -1,6 +1,7 @@
 
 import math
 from io import BytesIO
+import zipfile
 
 import numpy as np
 import pandas as pd
@@ -646,6 +647,22 @@ def build_excel_bytes_safe(sheets: dict) -> tuple[bytes | None, str | None]:
     return None, last_error
 
 
+def build_csv_zip_bytes(sheets: dict) -> bytes:
+    """
+    Gera um arquivo ZIP contendo um CSV para cada tabela de saída.
+    Esse caminho independe de engines de Excel e funciona como fallback robusto.
+    """
+    zip_buffer = BytesIO()
+
+    with zipfile.ZipFile(zip_buffer, mode="w", compression=zipfile.ZIP_DEFLATED) as zf:
+        for sheet_name, df_sheet in sheets.items():
+            csv_name = f"{sheet_name}.csv"
+            csv_bytes = df_sheet.to_csv(index=False).encode("utf-8-sig")
+            zf.writestr(csv_name, csv_bytes)
+
+    return zip_buffer.getvalue()
+
+
 def build_export_workbook(
     *,
     modo_selecionado: str,
@@ -657,6 +674,7 @@ def build_export_workbook(
 ) -> dict:
     """
     Monta todas as abas do Excel contendo as informações das duas pilhas.
+    Também monta um ZIP com CSVs para exportação sem dependência de engine externa.
     """
     df_resumo = pd.DataFrame(
         [
@@ -702,20 +720,26 @@ def build_export_workbook(
     }
 
     xlsx_bytes, xlsx_status = build_excel_bytes_safe(sheets)
+    csv_zip_bytes = build_csv_zip_bytes(sheets)
     return {
         "xlsx_bytes": xlsx_bytes,
         "xlsx_status": xlsx_status,
+        "csv_zip_bytes": csv_zip_bytes,
         "sheets": sheets,
     }
 
 
 def render_excel_download(export_bundle: dict):
     """
-    Exibe o botão final de download do relatório Excel.
+    Exibe os botões finais de download.
+    Primeiro tenta Excel; em paralelo sempre oferece CSV/ZIP como alternativa.
     """
     st.divider()
-    st.subheader("Output em Excel")
+    st.subheader("Output dos Resultados")
 
+    # --------------------------------------------
+    # Bloco 1: Exportação em Excel, quando disponível
+    # --------------------------------------------
     if export_bundle.get("xlsx_bytes") is not None:
         st.download_button(
             label="Baixar Excel com informações completas da Pilha A e da Pilha B",
@@ -729,6 +753,37 @@ def render_excel_download(export_bundle: dict):
         st.warning("A exportação Excel não está disponível neste ambiente.")
         if export_bundle.get("xlsx_status"):
             st.caption(f"Detalhe técnico: {export_bundle.get('xlsx_status')}")
+
+    # --------------------------------------------
+    # Bloco 2: Exportação alternativa em ZIP com todos os CSVs
+    # --------------------------------------------
+    st.download_button(
+        label="Baixar ZIP com todos os CSVs das Pilhas A e B",
+        data=export_bundle["csv_zip_bytes"],
+        file_name="pilhas_rom_casos_A_e_B_csv.zip",
+        mime="application/zip",
+        use_container_width=True,
+    )
+
+    # --------------------------------------------
+    # Bloco 3: Exportação individual por tabela em CSV
+    # --------------------------------------------
+    st.markdown("**Downloads individuais em CSV**")
+    nomes_tabelas = list(export_bundle["sheets"].keys())
+    tabela_csv = st.selectbox(
+        "Escolha a tabela para baixar em CSV",
+        options=nomes_tabelas,
+        key="csv_sheet_selector",
+    )
+    df_csv = export_bundle["sheets"][tabela_csv]
+
+    st.download_button(
+        label=f"Baixar CSV da tabela: {tabela_csv}",
+        data=df_csv.to_csv(index=False).encode("utf-8-sig"),
+        file_name=f"{tabela_csv}.csv",
+        mime="text/csv",
+        use_container_width=True,
+    )
 
 
 # ============================================================
