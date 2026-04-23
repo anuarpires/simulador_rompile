@@ -39,22 +39,22 @@ CORES_CAMADAS = {
 # ============================================================
 # 2) FUNÇÕES MATEMÁTICAS DO BLEND
 # ============================================================
-"""
-NOTA DE ENGENHARIA DE MINAS SOBRE O COMPORTAMENTO DO SOLVER:
-O algoritmo de programação linear excluiu as camadas S4 e CI porque, estritamente sob a ótica 
-matemática da função objetivo, elas representam o pior custo-benefício químico (maior teor de 
-cinzas e menor matéria volátil) para fechar a meta de 50.000 toneladas. O otimizador atua de 
-forma puramente analítica, priorizando a exaustão total das frentes de melhor qualidade (S2, S3 e S5) 
-e utilizando apenas uma fração da camada CS para completar o pequeno saldo numérico restante, 
-descartando sumariamente as opções inferiores. 
-
-No entanto, embora entregue o blend teoricamente perfeito, essa solução esbarra na restrição 
-geométrica da mineração: como a camada S4 está fisicamente sobreposta à S3 no pacote geológico, 
-é operacionalmente impossível acessar e extrair a S3 sem antes decapear e destinar a S4, 
-evidenciando que o código precisará de novas regras de precedência — amarrando a extração de 
-uma camada inferior à obrigatoriedade de uso da camada superior — para que a matemática reflita 
-com exatidão a realidade da operação.
-"""
+# ============================================================
+# NOTA DE ENGENHARIA - COMPORTAMENTO DO ALGORITMO:
+# ============================================================
+# O algoritmo de programação linear excluiu as camadas S4 e CI porque, estritamente sob a ótica 
+# matemática da função objetivo, elas representam o pior custo-benefício químico (maior teor de 
+# cinzas e menor matéria volátil) para fechar a meta de 50.000 toneladas. O otimizador atua de 
+# forma puramente analítica, priorizando a exaustão total das frentes de melhor qualidade (S2, S3 e S5) 
+# e utilizando apenas uma fração da camada CS para completar o pequeno saldo numérico restante, 
+# descartando sumariamente as opções inferiores. 
+# 
+# No entanto, embora entregue o blend teoricamente perfeito, essa solução esbarra na restrição 
+# geométrica da mineração: como a camada S4 está fisicamente sobreposta à S3 no pacote geológico, 
+# é operacionalmente impossível acessar e extrair a S3 sem antes decapear e destinar a S4, 
+# evidenciando que o código precisará de novas regras de precedência — amarrando a extração de 
+# uma camada inferior à obrigatoriedade de uso da camada superior — para que a matemática reflita 
+# com exatidão a realidade da operação.
 def zscore(x: np.ndarray) -> np.ndarray:
     s = x.std()
     return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
