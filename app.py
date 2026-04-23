@@ -1,5 +1,4 @@
 import math
-
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
@@ -44,10 +43,8 @@ def zscore(x: np.ndarray) -> np.ndarray:
     s = x.std()
     return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
 
-
 def build_linear_problem(df: pd.DataFrame, specs: dict, target_mass: float, volume_max_m3: float | None):
     n = len(df)
-
     vm = df["vm"].to_numpy(dtype=float)
     ts = df["ts"].to_numpy(dtype=float)
     cinza = df["cinza"].to_numpy(dtype=float)
@@ -80,7 +77,6 @@ def build_linear_problem(df: pd.DataFrame, specs: dict, target_mass: float, volu
     c = (-1.0 * zscore(vm) + 1.0 * zscore(ts) + 1.0 * zscore(cinza))
     return c, A_ub, b_ub, A_eq, b_eq, bounds
 
-
 def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
     massa_final = float(df_res["ton_calculada"].sum())
     volume_total = float((df_res["ton_calculada"] / df_res["densidade"]).sum())
@@ -98,7 +94,6 @@ def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
         "rho_aparente": rho_aparente,
     }
 
-
 def enrich_total_composition(df_res: pd.DataFrame, metrics: dict) -> pd.DataFrame:
     df_total = df_res.copy()
     df_total["volume_m3"] = df_total["ton_calculada"] / df_total["densidade"]
@@ -106,7 +101,6 @@ def enrich_total_composition(df_res: pd.DataFrame, metrics: dict) -> pd.DataFram
     df_total["frac_volume_%"] = 100.0 * df_total["volume_m3"] / metrics["volume_total"]
     df_total["ordem_plot"] = df_total["camada"].map(ORDEM_CONSTRUCAO).fillna(99)
     return df_total.sort_values("ordem_plot").reset_index(drop=True)
-
 
 # ============================================================
 # 3) FUNÇÕES GEOMÉTRICAS DO INVÓLUCRO DA PILHA
@@ -117,31 +111,25 @@ def width_at_height(y: float, larg_base: float, angulo: float) -> float:
         return larg_base
     return max(0.0, larg_base - 2.0 * (y / tanv))
 
-
 def cross_section_area_up_to(h: float, larg_base: float, angulo: float) -> float:
     h = max(0.0, h)
     largura_topo = width_at_height(h, larg_base, angulo)
     return h * (larg_base + largura_topo) / 2.0
 
-
 def longitudinal_trapezoid_volume(comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
     return comp * cross_section_area_up_to(alt_max, larg_base, angulo)
-
 
 def volume_between_heights(y0: float, y1: float, comp: float, larg_base: float, angulo: float) -> float:
     y0 = max(0.0, y0)
     y1 = max(y0, y1)
     return comp * (cross_section_area_up_to(y1, larg_base, angulo) - cross_section_area_up_to(y0, larg_base, angulo))
 
-
 def solve_height_for_volume(volume_target: float, comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
     volume_max = longitudinal_trapezoid_volume(comp, larg_base, alt_max, angulo)
-
     if volume_target <= 0:
         return 0.0
     if volume_target >= volume_max:
         return alt_max
-
     lo, hi = 0.0, alt_max
     for _ in range(70):
         mid = (lo + hi) / 2.0
@@ -152,23 +140,15 @@ def solve_height_for_volume(volume_target: float, comp: float, larg_base: float,
             hi = mid
     return (lo + hi) / 2.0
 
-
 def solve_upper_height_for_segment_volume(
-    y_base: float,
-    target_volume: float,
-    comp: float,
-    larg_base: float,
-    alt_max: float,
-    angulo: float,
+    y_base: float, target_volume: float, comp: float, larg_base: float, alt_max: float, angulo: float
 ) -> float:
     y_base = max(0.0, y_base)
     if target_volume <= 0:
         return y_base
-
     vol_disponivel = volume_between_heights(y_base, alt_max, comp, larg_base, angulo)
     if target_volume >= vol_disponivel:
         return alt_max
-
     lo, hi = y_base, alt_max
     for _ in range(70):
         mid = (lo + hi) / 2.0
@@ -179,16 +159,11 @@ def solve_upper_height_for_segment_volume(
             hi = mid
     return (lo + hi) / 2.0
 
-
 # ============================================================
 # 4) PILHA A - ESTRATOS POR CAMADA
 # ============================================================
 def prepare_pile_a_strata(
-    df_res: pd.DataFrame,
-    comp_base: float,
-    larg_base: float,
-    alt_max: float,
-    angulo_rep: float,
+    df_res: pd.DataFrame, comp_base: float, larg_base: float, alt_max: float, angulo_rep: float
 ) -> dict:
     df_total = df_res.copy()
     df_total["volume_m3"] = df_total["ton_calculada"] / df_total["densidade"]
@@ -201,12 +176,7 @@ def prepare_pile_a_strata(
     for _, row in df_total.iterrows():
         vol = float(row["volume_m3"])
         y_topo = solve_upper_height_for_segment_volume(
-            y_base=y_atual,
-            target_volume=vol,
-            comp=comp_base,
-            larg_base=larg_base,
-            alt_max=alt_max,
-            angulo=angulo_rep,
+            y_base=y_atual, target_volume=vol, comp=comp_base, larg_base=larg_base, alt_max=alt_max, angulo=angulo_rep
         )
 
         rows.append(
@@ -232,46 +202,22 @@ def prepare_pile_a_strata(
         "altura_efetiva_m": altura_efetiva,
     }
 
-
 # ============================================================
 # 5) PILHA B - LIFT / SUBLIFTING POR CAMADA GEOLÓGICA
 # ============================================================
 def prepare_pile_b_lifts(
-    df_res: pd.DataFrame,
-    comp_base: float,
-    larg_base: float,
-    alt_max: float,
-    angulo_rep: float,
-    altura_lift: float,
-    altura_sublift: float,
+    df_res: pd.DataFrame, comp_base: float, larg_base: float, alt_max: float, angulo_rep: float, altura_lift: float, altura_sublift: float
 ) -> dict:
-    """
-    Constrói a Pilha B a partir da estratigrafia da Pilha A.
-
-    Lógica:
-        1. Calcula a Pilha A como estratos puros por camada geológica;
-        2. Cada camada geológica é subdividida em lifts sucessivos;
-        3. Cada lift é subdividido em sublifts;
-        4. Cada lift/subllift pertence a uma única camada geológica;
-        5. A Pilha B preserva a mesma massa total e a mesma composição global,
-           mas aumenta a estratificação.
-    """
     pile_a = prepare_pile_a_strata(
-        df_res=df_res,
-        comp_base=comp_base,
-        larg_base=larg_base,
-        alt_max=alt_max,
-        angulo_rep=angulo_rep,
+        df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep
     )
 
     df_camadas = pile_a["df_camadas"].copy()
-
     metrics = calculate_quality_metrics(df_res)
     df_layers = enrich_total_composition(df_res, metrics).copy()
 
     lift_rows = []
     sublift_rows = []
-
     lift_global_id = 1
 
     for _, camada_row in df_camadas.iterrows():
@@ -285,10 +231,8 @@ def prepare_pile_b_lifts(
 
         while y0 < y_layer_topo - 1e-9:
             y1 = min(y_layer_topo, y0 + altura_lift)
-
             vol_lift = volume_between_heights(y0, y1, comp_base, larg_base, angulo_rep)
             massa_lift = vol_lift * densidade
-
             lift_nome = f"{camada}-L{lift_seq}"
 
             lift_rows.append(
@@ -310,10 +254,8 @@ def prepare_pile_b_lifts(
 
             z0 = y0
             sub_seq = 1
-
             while z0 < y1 - 1e-9:
                 z1 = min(y1, z0 + altura_sublift)
-
                 vol_sub = volume_between_heights(z0, z1, comp_base, larg_base, angulo_rep)
                 massa_sub = vol_sub * densidade
 
@@ -335,7 +277,6 @@ def prepare_pile_b_lifts(
                         "densidade": densidade,
                     }
                 )
-
                 z0 = z1
                 sub_seq += 1
 
@@ -353,7 +294,6 @@ def prepare_pile_b_lifts(
         "df_sublifts": df_sublifts,
         "altura_efetiva_m": pile_a["altura_efetiva_m"],
     }
-
 
 # ============================================================
 # 6) FUNÇÕES DE VISUALIZAÇÃO GRÁFICA
@@ -381,14 +321,9 @@ def build_pile_a_figure(df_camadas: pd.DataFrame, larg_base: float, alt_max: flo
 
         fig.add_trace(
             go.Scatter(
-                x=x_coords,
-                y=y_coords,
-                fill="toself",
-                mode="lines",
-                line=dict(color="white", width=1),
-                fillcolor=CORES_CAMADAS.get(camada, "#777777"),
-                name=camada,
-                legendgroup=camada,
+                x=x_coords, y=y_coords, fill="toself", mode="lines",
+                line=dict(color="white", width=1), fillcolor=CORES_CAMADAS.get(camada, "#777777"),
+                name=camada, legendgroup=camada,
                 text=(
                     f"Camada: {camada}"
                     f"<br>Base: {y0:.2f} m"
@@ -402,33 +337,19 @@ def build_pile_a_figure(df_camadas: pd.DataFrame, larg_base: float, alt_max: flo
         )
 
     fig.add_hline(y=alt_max, line_dash="dash", line_color="red", annotation_text="Altura máxima do pátio")
-
     fig.update_layout(
         title="Seção Transversal - Pilha A | Estratos por camada",
-        xaxis_title="Largura da pilha (m)",
-        yaxis_title="Altura (m)",
+        xaxis_title="Largura da pilha (m)", yaxis_title="Altura (m)",
         xaxis=dict(range=[-5, larg_base + 5], tick0=0, dtick=10),
         yaxis=dict(
-            range=[
-                0,
-                max(
-                    alt_max + 0.5,
-                    float(df_camadas["y_topo_m"].max()) + 0.5 if not df_camadas.empty else alt_max + 0.5,
-                ),
-            ]
+            range=[0, max(alt_max + 0.5, float(df_camadas["y_topo_m"].max()) + 0.5 if not df_camadas.empty else alt_max + 0.5)]
         ),
-        template="plotly_white",
-        legend_title="Camadas",
-        margin=dict(l=20, r=20, t=60, b=20),
-        hovermode="closest",
+        template="plotly_white", legend_title="Camadas",
+        margin=dict(l=20, r=20, t=60, b=20), hovermode="closest",
     )
     return fig
 
-
 def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_rep: float) -> go.Figure:
-    """
-    Desenha a Pilha B como lifts geológicos puros, com subdivisões em sublifts.
-    """
     df_lifts = model["df_lifts"].copy()
     df_sublifts = model["df_sublifts"].copy()
     altura_efetiva = model["altura_efetiva_m"]
@@ -445,25 +366,17 @@ def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_re
         larg_sup = width_at_height(y1, larg_base, angulo_rep)
 
         x_coords = [
-            centro_x - larg_inf / 2.0,
-            centro_x + larg_inf / 2.0,
-            centro_x + larg_sup / 2.0,
-            centro_x - larg_sup / 2.0,
+            centro_x - larg_inf / 2.0, centro_x + larg_inf / 2.0,
+            centro_x + larg_sup / 2.0, centro_x - larg_sup / 2.0,
             centro_x - larg_inf / 2.0,
         ]
         y_coords = [y0, y0, y1, y1, y0]
 
         fig.add_trace(
             go.Scatter(
-                x=x_coords,
-                y=y_coords,
-                fill="toself",
-                mode="lines",
-                line=dict(color="white", width=1),
-                fillcolor=CORES_CAMADAS.get(camada, "#777777"),
-                name=camada,
-                legendgroup=camada,
-                showlegend=False,
+                x=x_coords, y=y_coords, fill="toself", mode="lines",
+                line=dict(color="white", width=1), fillcolor=CORES_CAMADAS.get(camada, "#777777"),
+                name=camada, legendgroup=camada, showlegend=False,
                 text=(
                     f"Lift: {row['lift_nome']}"
                     f"<br>Camada: {camada}"
@@ -481,43 +394,30 @@ def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_re
         y1 = float(row["y_topo_m"])
         if y1 >= altura_efetiva - 1e-9:
             continue
-
         fig.add_hline(
-            y=y1,
-            line_dash="dot",
-            line_color="rgba(30,30,30,0.25)",
-            annotation_text=row["sublift_nome"],
-            annotation_position="left",
+            y=y1, line_dash="dot", line_color="rgba(30,30,30,0.25)",
+            annotation_text=row["sublift_nome"], annotation_position="left",
         )
 
     for camada in df_lifts["camada"].drop_duplicates().tolist():
         fig.add_trace(
             go.Scatter(
-                x=[None],
-                y=[None],
-                mode="markers",
+                x=[None], y=[None], mode="markers",
                 marker=dict(size=12, color=CORES_CAMADAS.get(camada, "#777777")),
-                name=camada,
-                legendgroup=camada,
-                showlegend=True,
+                name=camada, legendgroup=camada, showlegend=True,
             )
         )
 
     fig.add_hline(y=alt_max, line_dash="dash", line_color="red", annotation_text="Altura máxima do pátio")
-
     fig.update_layout(
         title="Seção Transversal - Pilha B | Lifts geológicos / Sublifting",
-        xaxis_title="Largura da pilha (m)",
-        yaxis_title="Altura (m)",
+        xaxis_title="Largura da pilha (m)", yaxis_title="Altura (m)",
         xaxis=dict(range=[-5, larg_base + 5], tick0=0, dtick=10),
         yaxis=dict(range=[0, max(alt_max + 0.5, altura_efetiva + 0.5)]),
-        template="plotly_white",
-        legend_title="Camadas",
-        margin=dict(l=20, r=20, t=60, b=20),
-        hovermode="closest",
+        template="plotly_white", legend_title="Camadas",
+        margin=dict(l=20, r=20, t=60, b=20), hovermode="closest",
     )
     return fig
-
 
 # ============================================================
 # 8) SIDEBAR - PARÂMETROS DE ENTRADA
@@ -578,25 +478,18 @@ if st.button("Rodar Solver de Otimização", type="primary"):
     else:
         try:
             vol_max = longitudinal_trapezoid_volume(comp_base, larg_base, alt_max, angulo_rep)
-
             specs = {"vm_min": vm_min, "ts_max": ts_max, "cinza_max": cinza_max}
             c, A_ub, b_ub, A_eq, b_eq, bounds = build_linear_problem(df_valido, specs, alvo_massa, vol_max)
 
             res = linprog(
-                c,
-                A_ub=A_ub if A_ub else None,
-                b_ub=b_ub if b_ub else None,
-                A_eq=A_eq,
-                b_eq=b_eq,
-                bounds=bounds,
-                method="highs",
+                c, A_ub=A_ub if A_ub else None, b_ub=b_ub if b_ub else None,
+                A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs",
             )
 
             if not res.success:
                 st.error(f"O solver não encontrou uma solução viável: {res.message}")
             else:
                 st.success("Solução otimizada encontrada.")
-
                 df_valido["ton_calculada"] = res.x
                 df_res = df_valido[df_valido["ton_calculada"] > 1e-6].copy()
 
@@ -604,21 +497,11 @@ if st.button("Rodar Solver de Otimização", type="primary"):
                 df_total = enrich_total_composition(df_res, metrics)
 
                 pile_a = prepare_pile_a_strata(
-                    df_res=df_res,
-                    comp_base=comp_base,
-                    larg_base=larg_base,
-                    alt_max=alt_max,
-                    angulo_rep=angulo_rep,
+                    df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep
                 )
-
                 pile_b = prepare_pile_b_lifts(
-                    df_res=df_res,
-                    comp_base=comp_base,
-                    larg_base=larg_base,
-                    alt_max=alt_max,
-                    angulo_rep=angulo_rep,
-                    altura_lift=altura_lift,
-                    altura_sublift=altura_sublift,
+                    df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep,
+                    altura_lift=altura_lift, altura_sublift=altura_sublift
                 )
 
                 st.divider()
@@ -626,9 +509,7 @@ if st.button("Rodar Solver de Otimização", type="primary"):
 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric(
-                    "Massa Total",
-                    f"{metrics['massa_final']:,.0f} t",
-                    delta=f"{metrics['massa_final'] - alvo_massa:,.0f} vs alvo",
+                    "Massa Total", f"{metrics['massa_final']:,.0f} t", delta=f"{metrics['massa_final'] - alvo_massa:,.0f} vs alvo",
                 )
 
                 cor_vm = "normal" if metrics["vm_final"] >= vm_min else "inverse"
@@ -648,7 +529,6 @@ if st.button("Rodar Solver de Otimização", type="primary"):
 
                 st.divider()
                 st.subheader("Composição Total do Blend Otimizado")
-
                 st.dataframe(
                     df_total[["camada", "ton_calculada", "volume_m3", "frac_massa_%", "frac_volume_%"]].style.format(
                         {
@@ -671,14 +551,12 @@ if st.button("Rodar Solver de Otimização", type="primary"):
 
                     if modo_construtivo == "Pilha A - Estratos por camada":
                         df_a = pile_a["df_camadas"].copy()
-
                         st.info(
                             f"**Pilha A**\n\n"
                             f"- Primeira camada esteirada como base;\n"
                             f"- Demais camadas empilhadas por cima como estratos puros;\n"
                             f"- Altura ocupada: **{pile_a['altura_efetiva_m']:.2f} m**."
                         )
-
                         st.dataframe(
                             df_a.style.format(
                                 {
@@ -701,30 +579,17 @@ if st.button("Rodar Solver de Otimização", type="primary"):
                         with abas[0]:
                             df_show_lifts = pile_b["df_lifts"][
                                 [
-                                    "lift_global",
-                                    "lift_nome",
-                                    "camada",
-                                    "lift_seq",
-                                    "y_base_m",
-                                    "y_topo_m",
-                                    "altura_lift_m",
-                                    "largura_base_m",
-                                    "largura_topo_m",
-                                    "volume_lift_m3",
-                                    "massa_lift_t",
+                                    "lift_global", "lift_nome", "camada", "lift_seq", "y_base_m",
+                                    "y_topo_m", "altura_lift_m", "largura_base_m", "largura_topo_m",
+                                    "volume_lift_m3", "massa_lift_t",
                                 ]
                             ].copy()
-
                             st.dataframe(
                                 df_show_lifts.style.format(
                                     {
-                                        "y_base_m": "{:.2f}",
-                                        "y_topo_m": "{:.2f}",
-                                        "altura_lift_m": "{:.2f}",
-                                        "largura_base_m": "{:.2f}",
-                                        "largura_topo_m": "{:.2f}",
-                                        "volume_lift_m3": "{:,.0f}",
-                                        "massa_lift_t": "{:,.0f}",
+                                        "y_base_m": "{:.2f}", "y_topo_m": "{:.2f}", "altura_lift_m": "{:.2f}",
+                                        "largura_base_m": "{:.2f}", "largura_topo_m": "{:.2f}",
+                                        "volume_lift_m3": "{:,.0f}", "massa_lift_t": "{:,.0f}",
                                     }
                                 ),
                                 use_container_width=True,
@@ -733,44 +598,31 @@ if st.button("Rodar Solver de Otimização", type="primary"):
                         with abas[1]:
                             df_show_sublifts = pile_b["df_sublifts"][
                                 [
-                                    "lift_global",
-                                    "lift_nome",
-                                    "sublift_nome",
-                                    "camada",
-                                    "sublift_seq",
-                                    "y_base_m",
-                                    "y_topo_m",
-                                    "altura_sublift_m",
-                                    "largura_base_m",
-                                    "largura_topo_m",
-                                    "volume_sublift_m3",
-                                    "massa_sublift_t",
+                                    "lift_global", "lift_nome", "sublift_nome", "camada", "sublift_seq",
+                                    "y_base_m", "y_topo_m", "altura_sublift_m", "largura_base_m",
+                                    "largura_topo_m", "volume_sublift_m3", "massa_sublift_t",
                                 ]
                             ].copy()
-
                             st.dataframe(
                                 df_show_sublifts.style.format(
                                     {
-                                        "y_base_m": "{:.2f}",
-                                        "y_topo_m": "{:.2f}",
-                                        "altura_sublift_m": "{:.2f}",
-                                        "largura_base_m": "{:.2f}",
-                                        "largura_topo_m": "{:.2f}",
-                                        "volume_sublift_m3": "{:,.0f}",
-                                        "massa_sublift_t": "{:,.0f}",
+                                        "y_base_m": "{:.2f}", "y_topo_m": "{:.2f}", "altura_sublift_m": "{:.2f}",
+                                        "largura_base_m": "{:.2f}", "largura_topo_m": "{:.2f}",
+                                        "volume_sublift_m3": "{:,.0f}", "massa_sublift_t": "{:,.0f}",
                                     }
                                 ),
                                 use_container_width=True,
                             )
 
                         with abas[2]:
+                            # CORREÇÃO APLICADA AQUI
                             st.dataframe(
-                                pile_b["df_layers"][["camada", "ton_calculada", "volume_m3", "mass_frac", "vol_frac"]].style.format(
+                                pile_b["df_layers"][["camada", "ton_calculada", "volume_m3", "frac_massa_%", "frac_volume_%"]].style.format(
                                     {
                                         "ton_calculada": "{:,.0f}",
                                         "volume_m3": "{:,.0f}",
-                                        "mass_frac": "{:.4f}",
-                                        "vol_frac": "{:.4f}",
+                                        "frac_massa_%": "{:.4f}",
+                                        "frac_volume_%": "{:.4f}",
                                     }
                                 ),
                                 use_container_width=True,
@@ -790,7 +642,6 @@ if st.button("Rodar Solver de Otimização", type="primary"):
                         fig = build_pile_a_figure(pile_a["df_camadas"], larg_base, alt_max, angulo_rep)
                     else:
                         fig = build_pile_b_figure(pile_b, larg_base, alt_max, angulo_rep)
-
                     st.plotly_chart(fig, use_container_width=True)
 
         except Exception as e:
