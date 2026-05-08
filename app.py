@@ -1,26 +1,30 @@
+
 import math
+from io import BytesIO
+
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from scipy.optimize import linprog
 
 # ============================================================
 # 1) CONFIGURAÇÃO GERAL DA APLICAÇÃO
 # ============================================================
-st.set_page_config(page_title="Otimizador de Pilha ROM - Copelmi", layout="wide")
-st.title("Otimizador Avançado de Blending - Pilha ROM")
+st.set_page_config(page_title="Conferência de Receita - Pilha ROM", layout="wide")
+st.title("Conferência de Receita por Média Ponderada - Pilha ROM")
 
 st.markdown(
     """
-    Este aplicativo otimiza o **blend global** por programação linear e, em seguida,
-    representa a pilha de duas formas distintas:
+    Este aplicativo **não otimiza** a receita.
 
-    - **Pilha A - Estratos por camada**: primeira camada esteirada como base e as demais camadas empilhadas por cima;
-    - **Pilha B - Lift/Sublifting**: cada **camada geológica** é subdividida em **lifts** e cada lift pode ser subdividido em **sublifts**.
-
-    A composição química média global do blend permanece a mesma; o que muda entre os casos
-    é a **distribuição espacial da pilha**, a **tabela executiva** e a **visualização gráfica**.
+    Ele foi configurado para:
+    - receber os **dados editáveis imputados** pelo usuário;
+    - calcular a **média ponderada de qualidade** a partir da **massa informada para a receita**;
+    - comparar o resultado obtido com as **metas da usina**;
+    - verificar se a **massa/volume da receita** cabe no **volume máximo de projeto da pilha**;
+    - representar a pilha em dois modos:
+        - **Pilha A - Estratos por camada**
+        - **Pilha B - Lift / Sublifting**
     """
 )
 
@@ -36,69 +40,126 @@ CORES_CAMADAS = {
     "S6": "#8E44AD",
 }
 
+
 # ============================================================
-# 2) FUNÇÕES MATEMÁTICAS DO BLEND
+# 2) FUNÇÕES DE SUPORTE
 # ============================================================
-# ============================================================
-# NOTA DE ENGENHARIA - COMPORTAMENTO DO ALGORITMO:
-# ============================================================
-# O algoritmo de programação linear excluiu as camadas S4 e CI porque, estritamente sob a ótica 
-# matemática da função objetivo, elas representam o pior custo-benefício químico (maior teor de 
-# cinzas e menor matéria volátil) para fechar a meta de 50.000 toneladas. O otimizador atua de 
-# forma puramente analítica, priorizando a exaustão total das frentes de melhor qualidade (S2, S3 e S5) 
-# e utilizando apenas uma fração da camada CS para completar o pequeno saldo numérico restante, 
-# descartando sumariamente as opções inferiores. 
-# 
-# No entanto, embora entregue o blend teoricamente perfeito, essa solução esbarra na restrição 
-# geométrica da mineração: como a camada S4 está fisicamente sobreposta à S3 no pacote geológico, 
-# é operacionalmente impossível acessar e extrair a S3 sem antes decapear e destinar a S4, 
-# evidenciando que o código precisará de novas regras de precedência — amarrando a extração de 
-# uma camada inferior à obrigatoriedade de uso da camada superior — para que a matemática reflita 
-# com exatidão a realidade da operação.
-def zscore(x: np.ndarray) -> np.ndarray:
-    s = x.std()
-    return np.zeros_like(x) if s == 0 else (x - x.mean()) / s
+def fmt_br(value: float, ndigits: int = 2) -> str:
+    if pd.isna(value):
+        return ""
+    txt = f"{value:,.{ndigits}f}"
+    return txt.replace(",", "X").replace(".", ",").replace("X", ".")
 
-def build_linear_problem(df: pd.DataFrame, specs: dict, target_mass: float, volume_max_m3: float | None):
-    n = len(df)
-    vm = df["vm"].to_numpy(dtype=float)
-    ts = df["ts"].to_numpy(dtype=float)
-    cinza = df["cinza"].to_numpy(dtype=float)
-    rho = df["densidade"].to_numpy(dtype=float)
 
-    bounds = [(0.0, float(row["ton_report"])) for _, row in df.iterrows()]
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    df = df.copy()
+    original = list(df.columns)
+    normalized = []
+    for col in original:
+        c = str(col).strip().lower()
+        c = (
+            c.replace("ã", "a")
+            .replace("á", "a")
+            .replace("â", "a")
+            .replace("é", "e")
+            .replace("ê", "e")
+            .replace("í", "i")
+            .replace("ó", "o")
+            .replace("ô", "o")
+            .replace("õ", "o")
+            .replace("ú", "u")
+            .replace("ç", "c")
+        )
+        c = c.replace("%", "").replace("(", "").replace(")", "")
+        c = c.replace("/", "_").replace("-", "_").replace(" ", "_")
+        normalized.append(c)
 
-    A_ub, b_ub = [], []
-    A_eq, b_eq = [], []
+    df.columns = normalized
 
-    A_eq.append(np.ones(n))
-    b_eq.append(float(target_mass))
+    rename_map = {}
+    aliases = {
+        "camada": ["camada", "layer"],
+        "ton_disponivel": [
+            "ton_disponivel", "ton_report", "tons", "ton", "tonelagem", "massa_disponivel", "rom_t"
+        ],
+        "ton_receita": [
+            "ton_receita", "ton_blend", "ton_usada", "ton_utilizada", "massa_receita", "massa_usada"
+        ],
+        "vm": ["vm", "materia_volatil", "volatile_matter"],
+        "ts": ["ts", "enxofre", "sulfur", "teor_de_enxofre"],
+        "cinza": ["cinza", "cbs", "ash"],
+        "densidade": ["densidade", "density", "rho"],
+    }
 
-    if specs.get("ts_max") is not None:
-        A_ub.append(ts - float(specs["ts_max"]))
-        b_ub.append(0.0)
+    for target, poss in aliases.items():
+        for p in poss:
+            if p in df.columns:
+                rename_map[p] = target
+                break
 
-    if specs.get("cinza_max") is not None:
-        A_ub.append(cinza - float(specs["cinza_max"]))
-        b_ub.append(0.0)
+    df = df.rename(columns=rename_map)
 
-    if specs.get("vm_min") is not None:
-        A_ub.append(float(specs["vm_min"]) - vm)
-        b_ub.append(0.0)
+    required_cols = ["camada", "vm", "ts", "cinza", "densidade"]
+    missing = [c for c in required_cols if c not in df.columns]
+    if missing:
+        raise ValueError(f"Colunas obrigatórias ausentes: {missing}")
 
-    if volume_max_m3 is not None:
-        A_ub.append(1.0 / rho)
-        b_ub.append(float(volume_max_m3))
+    if "ton_disponivel" not in df.columns:
+        df["ton_disponivel"] = np.nan
+    if "ton_receita" not in df.columns:
+        if "ton_disponivel" in df.columns:
+            df["ton_receita"] = df["ton_disponivel"].fillna(0.0)
+        else:
+            df["ton_receita"] = 0.0
 
-    c = (-1.0 * zscore(vm) + 1.0 * zscore(ts) + 1.0 * zscore(cinza))
-    return c, A_ub, b_ub, A_eq, b_eq, bounds
+    ordered_cols = ["camada", "ton_disponivel", "ton_receita", "vm", "ts", "cinza", "densidade"]
+    others = [c for c in df.columns if c not in ordered_cols]
+    return df[ordered_cols + others]
+
+
+def validate_recipe(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    df = df.copy()
+    for c in ["ton_disponivel", "ton_receita", "vm", "ts", "cinza", "densidade"]:
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    df["camada"] = df["camada"].astype(str).str.strip()
+    df = df[df["camada"] != ""].copy()
+
+    discarded = []
+
+    invalid_quality = df[
+        df[["vm", "ts", "cinza", "densidade"]].isna().any(axis=1) | (df["densidade"] <= 0)
+    ].copy()
+    if not invalid_quality.empty:
+        invalid_quality["motivo_descarte"] = "Dados de qualidade/densidade inválidos"
+        discarded.append(invalid_quality)
+
+    df = df[~df.index.isin(invalid_quality.index)].copy()
+
+    zero_or_negative = df[df["ton_receita"].fillna(0) <= 0].copy()
+    if not zero_or_negative.empty:
+        zero_or_negative["motivo_descarte"] = "Tonelagem de receita não informada ou <= 0"
+        discarded.append(zero_or_negative)
+
+    df = df[df["ton_receita"].fillna(0) > 0].copy()
+
+    disponibilidade_excedida = df[
+        df["ton_disponivel"].notna() & (df["ton_receita"] > df["ton_disponivel"] + 1e-9)
+    ].copy()
+    if not disponibilidade_excedida.empty:
+        disponibilidade_excedida["motivo_descarte"] = "Receita excede a disponibilidade informada"
+        discarded.append(disponibilidade_excedida)
+
+    discarded_df = pd.concat(discarded, ignore_index=True) if discarded else pd.DataFrame()
+    return df.reset_index(drop=True), discarded_df.reset_index(drop=True)
+
 
 def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
-    massa_final = float(df_res["ton_calculada"].sum())
-    volume_total = float((df_res["ton_calculada"] / df_res["densidade"]).sum())
-    vm_final = float(np.average(df_res["vm"], weights=df_res["ton_calculada"]))
-    ts_final = float(np.average(df_res["ts"], weights=df_res["ton_calculada"]))
-    cinza_final = float(np.average(df_res["cinza"], weights=df_res["ton_calculada"]))
+    massa_final = float(df_res["ton_receita"].sum())
+    volume_total = float((df_res["ton_receita"] / df_res["densidade"]).sum())
+    vm_final = float(np.average(df_res["vm"], weights=df_res["ton_receita"]))
+    ts_final = float(np.average(df_res["ts"], weights=df_res["ton_receita"]))
+    cinza_final = float(np.average(df_res["cinza"], weights=df_res["ton_receita"]))
     rho_aparente = massa_final / volume_total if volume_total > 0 else np.nan
 
     return {
@@ -110,13 +171,61 @@ def calculate_quality_metrics(df_res: pd.DataFrame) -> dict:
         "rho_aparente": rho_aparente,
     }
 
+
 def enrich_total_composition(df_res: pd.DataFrame, metrics: dict) -> pd.DataFrame:
     df_total = df_res.copy()
-    df_total["volume_m3"] = df_total["ton_calculada"] / df_total["densidade"]
-    df_total["frac_massa_%"] = 100.0 * df_total["ton_calculada"] / metrics["massa_final"]
+    df_total["volume_m3"] = df_total["ton_receita"] / df_total["densidade"]
+    df_total["frac_massa_%"] = 100.0 * df_total["ton_receita"] / metrics["massa_final"]
     df_total["frac_volume_%"] = 100.0 * df_total["volume_m3"] / metrics["volume_total"]
     df_total["ordem_plot"] = df_total["camada"].map(ORDEM_CONSTRUCAO).fillna(99)
     return df_total.sort_values("ordem_plot").reset_index(drop=True)
+
+
+def build_specs_comparison(metrics: dict, target_mass: float, specs: dict, volume_max_m3: float) -> pd.DataFrame:
+    rows = [
+        {
+            "item": "Massa total da receita (t)",
+            "resultado": metrics["massa_final"],
+            "meta": target_mass,
+            "criterio": "informativo",
+            "status": "OK" if abs(metrics["massa_final"] - target_mass) < 1e-6 else "DIFERENTE DO ALVO",
+            "folga": metrics["massa_final"] - target_mass,
+        },
+        {
+            "item": "VM (%)",
+            "resultado": metrics["vm_final"],
+            "meta": specs["vm_min"],
+            "criterio": ">=",
+            "status": "ATENDE" if metrics["vm_final"] >= specs["vm_min"] else "NÃO ATENDE",
+            "folga": metrics["vm_final"] - specs["vm_min"],
+        },
+        {
+            "item": "TS (%)",
+            "resultado": metrics["ts_final"],
+            "meta": specs["ts_max"],
+            "criterio": "<=",
+            "status": "ATENDE" if metrics["ts_final"] <= specs["ts_max"] else "NÃO ATENDE",
+            "folga": specs["ts_max"] - metrics["ts_final"],
+        },
+        {
+            "item": "Cinza/CBS",
+            "resultado": metrics["cinza_final"],
+            "meta": specs["cinza_max"],
+            "criterio": "<=",
+            "status": "ATENDE" if metrics["cinza_final"] <= specs["cinza_max"] else "NÃO ATENDE",
+            "folga": specs["cinza_max"] - metrics["cinza_final"],
+        },
+        {
+            "item": "Volume da receita (m³)",
+            "resultado": metrics["volume_total"],
+            "meta": volume_max_m3,
+            "criterio": "<=",
+            "status": "ATENDE" if metrics["volume_total"] <= volume_max_m3 else "NÃO ATENDE",
+            "folga": volume_max_m3 - metrics["volume_total"],
+        },
+    ]
+    return pd.DataFrame(rows)
+
 
 # ============================================================
 # 3) FUNÇÕES GEOMÉTRICAS DO INVÓLUCRO DA PILHA
@@ -127,34 +236,22 @@ def width_at_height(y: float, larg_base: float, angulo: float) -> float:
         return larg_base
     return max(0.0, larg_base - 2.0 * (y / tanv))
 
+
 def cross_section_area_up_to(h: float, larg_base: float, angulo: float) -> float:
     h = max(0.0, h)
     largura_topo = width_at_height(h, larg_base, angulo)
     return h * (larg_base + largura_topo) / 2.0
 
+
 def longitudinal_trapezoid_volume(comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
     return comp * cross_section_area_up_to(alt_max, larg_base, angulo)
+
 
 def volume_between_heights(y0: float, y1: float, comp: float, larg_base: float, angulo: float) -> float:
     y0 = max(0.0, y0)
     y1 = max(y0, y1)
     return comp * (cross_section_area_up_to(y1, larg_base, angulo) - cross_section_area_up_to(y0, larg_base, angulo))
 
-def solve_height_for_volume(volume_target: float, comp: float, larg_base: float, alt_max: float, angulo: float) -> float:
-    volume_max = longitudinal_trapezoid_volume(comp, larg_base, alt_max, angulo)
-    if volume_target <= 0:
-        return 0.0
-    if volume_target >= volume_max:
-        return alt_max
-    lo, hi = 0.0, alt_max
-    for _ in range(70):
-        mid = (lo + hi) / 2.0
-        v_mid = longitudinal_trapezoid_volume(comp, larg_base, mid, angulo)
-        if v_mid < volume_target:
-            lo = mid
-        else:
-            hi = mid
-    return (lo + hi) / 2.0
 
 def solve_upper_height_for_segment_volume(
     y_base: float, target_volume: float, comp: float, larg_base: float, alt_max: float, angulo: float
@@ -175,6 +272,7 @@ def solve_upper_height_for_segment_volume(
             hi = mid
     return (lo + hi) / 2.0
 
+
 # ============================================================
 # 4) PILHA A - ESTRATOS POR CAMADA
 # ============================================================
@@ -182,7 +280,7 @@ def prepare_pile_a_strata(
     df_res: pd.DataFrame, comp_base: float, larg_base: float, alt_max: float, angulo_rep: float
 ) -> dict:
     df_total = df_res.copy()
-    df_total["volume_m3"] = df_total["ton_calculada"] / df_total["densidade"]
+    df_total["volume_m3"] = df_total["ton_receita"] / df_total["densidade"]
     df_total["ordem_plot"] = df_total["camada"].map(ORDEM_CONSTRUCAO).fillna(99)
     df_total = df_total.sort_values("ordem_plot").reset_index(drop=True)
 
@@ -198,7 +296,7 @@ def prepare_pile_a_strata(
         rows.append(
             {
                 "camada": row["camada"],
-                "ton_calculada": float(row["ton_calculada"]),
+                "ton_receita": float(row["ton_receita"]),
                 "densidade": float(row["densidade"]),
                 "volume_m3": vol,
                 "y_base_m": y_atual,
@@ -213,20 +311,17 @@ def prepare_pile_a_strata(
     df_camadas = pd.DataFrame(rows)
     altura_efetiva = float(df_camadas["y_topo_m"].max()) if not df_camadas.empty else 0.0
 
-    return {
-        "df_camadas": df_camadas,
-        "altura_efetiva_m": altura_efetiva,
-    }
+    return {"df_camadas": df_camadas, "altura_efetiva_m": altura_efetiva}
+
 
 # ============================================================
 # 5) PILHA B - LIFT / SUBLIFTING POR CAMADA GEOLÓGICA
 # ============================================================
 def prepare_pile_b_lifts(
-    df_res: pd.DataFrame, comp_base: float, larg_base: float, alt_max: float, angulo_rep: float, altura_lift: float, altura_sublift: float
+    df_res: pd.DataFrame, comp_base: float, larg_base: float, alt_max: float, angulo_rep: float,
+    altura_lift: float, altura_sublift: float
 ) -> dict:
-    pile_a = prepare_pile_a_strata(
-        df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep
-    )
+    pile_a = prepare_pile_a_strata(df_res, comp_base, larg_base, alt_max, angulo_rep)
 
     df_camadas = pile_a["df_camadas"].copy()
     metrics = calculate_quality_metrics(df_res)
@@ -300,16 +395,14 @@ def prepare_pile_b_lifts(
             lift_seq += 1
             lift_global_id += 1
 
-    df_lifts = pd.DataFrame(lift_rows)
-    df_sublifts = pd.DataFrame(sublift_rows)
-
     return {
         "df_layers": df_layers,
         "df_camadas_base": df_camadas,
-        "df_lifts": df_lifts,
-        "df_sublifts": df_sublifts,
+        "df_lifts": pd.DataFrame(lift_rows),
+        "df_sublifts": pd.DataFrame(sublift_rows),
         "altura_efetiva_m": pile_a["altura_efetiva_m"],
     }
+
 
 # ============================================================
 # 6) FUNÇÕES DE VISUALIZAÇÃO GRÁFICA
@@ -337,16 +430,21 @@ def build_pile_a_figure(df_camadas: pd.DataFrame, larg_base: float, alt_max: flo
 
         fig.add_trace(
             go.Scatter(
-                x=x_coords, y=y_coords, fill="toself", mode="lines",
-                line=dict(color="white", width=1), fillcolor=CORES_CAMADAS.get(camada, "#777777"),
-                name=camada, legendgroup=camada,
+                x=x_coords,
+                y=y_coords,
+                fill="toself",
+                mode="lines",
+                line=dict(color="white", width=1),
+                fillcolor=CORES_CAMADAS.get(camada, "#777777"),
+                name=camada,
+                legendgroup=camada,
                 text=(
                     f"Camada: {camada}"
-                    f"<br>Base: {y0:.2f} m"
-                    f"<br>Topo: {y1:.2f} m"
-                    f"<br>Espessura: {row['espessura_m']:.2f} m"
-                    f"<br>Massa: {row['ton_calculada']:,.0f} t"
-                    f"<br>Volume: {row['volume_m3']:,.0f} m³"
+                    f"<br>Base: {fmt_br(y0)} m"
+                    f"<br>Topo: {fmt_br(y1)} m"
+                    f"<br>Espessura: {fmt_br(row['espessura_m'])} m"
+                    f"<br>Massa da receita: {fmt_br(row['ton_receita'], 2)} t"
+                    f"<br>Volume: {fmt_br(row['volume_m3'], 2)} m³"
                 ),
                 hoverinfo="text",
             )
@@ -355,15 +453,17 @@ def build_pile_a_figure(df_camadas: pd.DataFrame, larg_base: float, alt_max: flo
     fig.add_hline(y=alt_max, line_dash="dash", line_color="red", annotation_text="Altura máxima do pátio")
     fig.update_layout(
         title="Seção Transversal - Pilha A | Estratos por camada",
-        xaxis_title="Largura da pilha (m)", yaxis_title="Altura (m)",
+        xaxis_title="Largura da pilha (m)",
+        yaxis_title="Altura (m)",
         xaxis=dict(range=[-5, larg_base + 5], tick0=0, dtick=10),
-        yaxis=dict(
-            range=[0, max(alt_max + 0.5, float(df_camadas["y_topo_m"].max()) + 0.5 if not df_camadas.empty else alt_max + 0.5)]
-        ),
-        template="plotly_white", legend_title="Camadas",
-        margin=dict(l=20, r=20, t=60, b=20), hovermode="closest",
+        yaxis=dict(range=[0, max(alt_max + 0.5, float(df_camadas["y_topo_m"].max()) + 0.5 if not df_camadas.empty else alt_max + 0.5)]),
+        template="plotly_white",
+        legend_title="Camadas",
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="closest",
     )
     return fig
+
 
 def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_rep: float) -> go.Figure:
     df_lifts = model["df_lifts"].copy()
@@ -390,17 +490,23 @@ def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_re
 
         fig.add_trace(
             go.Scatter(
-                x=x_coords, y=y_coords, fill="toself", mode="lines",
-                line=dict(color="white", width=1), fillcolor=CORES_CAMADAS.get(camada, "#777777"),
-                name=camada, legendgroup=camada, showlegend=False,
+                x=x_coords,
+                y=y_coords,
+                fill="toself",
+                mode="lines",
+                line=dict(color="white", width=1),
+                fillcolor=CORES_CAMADAS.get(camada, "#777777"),
+                name=camada,
+                legendgroup=camada,
+                showlegend=False,
                 text=(
                     f"Lift: {row['lift_nome']}"
                     f"<br>Camada: {camada}"
-                    f"<br>Base: {y0:.2f} m"
-                    f"<br>Topo: {y1:.2f} m"
-                    f"<br>Espessura do lift: {row['altura_lift_m']:.2f} m"
-                    f"<br>Massa do lift: {row['massa_lift_t']:,.0f} t"
-                    f"<br>Volume do lift: {row['volume_lift_m3']:,.0f} m³"
+                    f"<br>Base: {fmt_br(y0)} m"
+                    f"<br>Topo: {fmt_br(y1)} m"
+                    f"<br>Espessura do lift: {fmt_br(row['altura_lift_m'])} m"
+                    f"<br>Massa do lift: {fmt_br(row['massa_lift_t'], 2)} t"
+                    f"<br>Volume do lift: {fmt_br(row['volume_lift_m3'], 2)} m³"
                 ),
                 hoverinfo="text",
             )
@@ -411,35 +517,72 @@ def build_pile_b_figure(model: dict, larg_base: float, alt_max: float, angulo_re
         if y1 >= altura_efetiva - 1e-9:
             continue
         fig.add_hline(
-            y=y1, line_dash="dot", line_color="rgba(30,30,30,0.25)",
-            annotation_text=row["sublift_nome"], annotation_position="left",
+            y=y1,
+            line_dash="dot",
+            line_color="rgba(30,30,30,0.25)",
+            annotation_text=row["sublift_nome"],
+            annotation_position="left",
         )
 
     for camada in df_lifts["camada"].drop_duplicates().tolist():
         fig.add_trace(
             go.Scatter(
-                x=[None], y=[None], mode="markers",
+                x=[None],
+                y=[None],
+                mode="markers",
                 marker=dict(size=12, color=CORES_CAMADAS.get(camada, "#777777")),
-                name=camada, legendgroup=camada, showlegend=True,
+                name=camada,
+                legendgroup=camada,
+                showlegend=True,
             )
         )
 
     fig.add_hline(y=alt_max, line_dash="dash", line_color="red", annotation_text="Altura máxima do pátio")
     fig.update_layout(
         title="Seção Transversal - Pilha B | Lifts geológicos / Sublifting",
-        xaxis_title="Largura da pilha (m)", yaxis_title="Altura (m)",
+        xaxis_title="Largura da pilha (m)",
+        yaxis_title="Altura (m)",
         xaxis=dict(range=[-5, larg_base + 5], tick0=0, dtick=10),
         yaxis=dict(range=[0, max(alt_max + 0.5, altura_efetiva + 0.5)]),
-        template="plotly_white", legend_title="Camadas",
-        margin=dict(l=20, r=20, t=60, b=20), hovermode="closest",
+        template="plotly_white",
+        legend_title="Camadas",
+        margin=dict(l=20, r=20, t=60, b=20),
+        hovermode="closest",
     )
     return fig
 
+
+def export_excel(
+    df_input: pd.DataFrame,
+    df_usadas: pd.DataFrame,
+    df_descartadas: pd.DataFrame,
+    df_total: pd.DataFrame,
+    df_specs: pd.DataFrame,
+    pile_a: dict,
+    pile_b: dict,
+    geometry: dict,
+) -> bytes:
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        df_input.to_excel(writer, index=False, sheet_name="input_editado")
+        df_usadas.to_excel(writer, index=False, sheet_name="receita_utilizada")
+        if not df_descartadas.empty:
+            df_descartadas.to_excel(writer, index=False, sheet_name="camadas_descartadas")
+        df_total.to_excel(writer, index=False, sheet_name="composicao_blend")
+        df_specs.to_excel(writer, index=False, sheet_name="comparacao_usina")
+        pile_a["df_camadas"].to_excel(writer, index=False, sheet_name="pilha_a")
+        pile_b["df_lifts"].to_excel(writer, index=False, sheet_name="pilha_b_lifts")
+        pile_b["df_sublifts"].to_excel(writer, index=False, sheet_name="pilha_b_sublifts")
+        pd.DataFrame([geometry]).to_excel(writer, index=False, sheet_name="geometria")
+    output.seek(0)
+    return output.getvalue()
+
+
 # ============================================================
-# 8) SIDEBAR - PARÂMETROS DE ENTRADA
+# 7) SIDEBAR - PARÂMETROS DE ENTRADA
 # ============================================================
-st.sidebar.header("Parâmetros da Pilha")
-alvo_massa = st.sidebar.number_input("Massa Alvo (t)", value=50000.0, step=1000.0)
+st.sidebar.header("Receita e Metas")
+alvo_massa = st.sidebar.number_input("Massa alvo de referência (t)", value=50000.0, step=1000.0)
 
 st.sidebar.header("Geometria do Pátio")
 comp_base = st.sidebar.number_input("Comprimento Base (m)", value=120.0)
@@ -461,20 +604,29 @@ if altura_sublift > altura_lift:
     st.sidebar.warning("A altura do sublift foi limitada à altura do lift.")
     altura_sublift = altura_lift
 
-st.sidebar.header("Restrições da Usina")
+st.sidebar.header("Metas da Usina")
 vm_min = st.sidebar.number_input("VM Mínimo (%)", value=19.30)
 ts_max = st.sidebar.number_input("TS Máximo (%)", value=2.20)
 cinza_max = st.sidebar.number_input("Cinza/CBS Máximo", value=57.17)
 
 # ============================================================
-# 9) TABELA DE DADOS EDITÁVEL
+# 8) ENTRADA DE DADOS
 # ============================================================
-st.subheader("Inventário de Frentes de Lavra (Editável)")
+st.subheader("Entrada de Dados Editável")
+
+st.caption(
+    "Edite diretamente a tabela ou envie um CSV. "
+    "A coluna **ton_receita** é a massa que será efetivamente usada na média ponderada. "
+    "A coluna **ton_disponivel** é opcional e serve apenas para conferir se a receita excede o disponível."
+)
+
+uploaded = st.file_uploader("Upload opcional de CSV", type=["csv"])
 
 dados_iniciais = pd.DataFrame(
     {
         "camada": ["S6", "S5", "S4", "S3", "S2", "CS", "CI"],
-        "ton_report": [0.0, 4138.0, 7926.0, 16039.0, 26914.0, 36211.0, 55195.0],
+        "ton_disponivel": [0.0, 4138.0, 7926.0, 16039.0, 33165.0, 136318.0, 118595.0],
+        "ton_receita": [0.0, 4138.0, 7926.0, 16039.0, 21897.0, 0.0, 0.0],
         "vm": [20.00, 21.11, 19.10, 21.07, 22.37, 19.23, 17.81],
         "ts": [1.50, 0.70, 0.94, 2.09, 1.44, 1.43, 1.14],
         "cinza": [50.00, 51.31, 58.13, 47.63, 46.47, 51.86, 59.73],
@@ -482,183 +634,237 @@ dados_iniciais = pd.DataFrame(
     }
 )
 
-df_editado = st.data_editor(dados_iniciais, num_rows="dynamic", use_container_width=True)
-df_valido = df_editado[df_editado["ton_report"] > 0].copy()
+if uploaded is not None:
+    try:
+        df_base = pd.read_csv(uploaded)
+        df_base = normalize_columns(df_base)
+    except Exception as exc:
+        st.error(f"Erro ao ler o CSV: {exc}")
+        st.stop()
+else:
+    df_base = dados_iniciais.copy()
+
+df_editado = st.data_editor(df_base, num_rows="dynamic", use_container_width=True)
 
 # ============================================================
-# 10) EXECUÇÃO DO SOLVER E APRESENTAÇÃO DOS RESULTADOS
+# 9) CÁLCULO DA MÉDIA PONDERADA
 # ============================================================
-if st.button("Rodar Solver de Otimização", type="primary"):
-    if df_valido.empty:
-        st.error("Nenhuma camada com tonelagem válida para otimizar.")
-    else:
-        try:
-            vol_max = longitudinal_trapezoid_volume(comp_base, larg_base, alt_max, angulo_rep)
-            specs = {"vm_min": vm_min, "ts_max": ts_max, "cinza_max": cinza_max}
-            c, A_ub, b_ub, A_eq, b_eq, bounds = build_linear_problem(df_valido, specs, alvo_massa, vol_max)
+if st.button("Calcular Média Ponderada da Receita", type="primary"):
+    try:
+        df_norm = normalize_columns(df_editado)
+        df_receita, df_descartadas = validate_recipe(df_norm)
 
-            res = linprog(
-                c, A_ub=A_ub if A_ub else None, b_ub=b_ub if b_ub else None,
-                A_eq=A_eq, b_eq=b_eq, bounds=bounds, method="highs",
+        if df_receita.empty:
+            st.error("Nenhuma camada válida com tonelagem de receita > 0.")
+            st.stop()
+
+        vol_max = longitudinal_trapezoid_volume(comp_base, larg_base, alt_max, angulo_rep)
+        specs = {"vm_min": vm_min, "ts_max": ts_max, "cinza_max": cinza_max}
+
+        metrics = calculate_quality_metrics(df_receita)
+        df_total = enrich_total_composition(df_receita, metrics)
+        df_specs = build_specs_comparison(metrics, alvo_massa, specs, vol_max)
+
+        pile_a = prepare_pile_a_strata(
+            df_res=df_receita,
+            comp_base=comp_base,
+            larg_base=larg_base,
+            alt_max=alt_max,
+            angulo_rep=angulo_rep,
+        )
+        pile_b = prepare_pile_b_lifts(
+            df_res=df_receita,
+            comp_base=comp_base,
+            larg_base=larg_base,
+            alt_max=alt_max,
+            angulo_rep=angulo_rep,
+            altura_lift=altura_lift,
+            altura_sublift=altura_sublift,
+        )
+
+        geometry = {
+            "comprimento_base_m": comp_base,
+            "largura_base_m": larg_base,
+            "altura_maxima_m": alt_max,
+            "angulo_repouso_graus": angulo_rep,
+            "volume_maximo_patio_m3": vol_max,
+            "volume_receita_m3": metrics["volume_total"],
+            "altura_efetiva_receita_m": pile_a["altura_efetiva_m"],
+        }
+
+        st.divider()
+        st.subheader("Resultado da Receita Informada")
+
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Massa da receita", f"{fmt_br(metrics['massa_final'])} t", delta=f"{fmt_br(metrics['massa_final'] - alvo_massa)} vs alvo")
+        c2.metric("VM obtido", f"{fmt_br(metrics['vm_final'])} %", delta=f"{fmt_br(metrics['vm_final'] - vm_min)} vs mínimo")
+        c3.metric("TS obtido", f"{fmt_br(metrics['ts_final'])} %", delta=f"{fmt_br(ts_max - metrics['ts_final'])} folga")
+        c4.metric("Cinza/CBS obtido", f"{fmt_br(metrics['cinza_final'])}", delta=f"{fmt_br(cinza_max - metrics['cinza_final'])} folga")
+
+        if metrics["volume_total"] > vol_max:
+            st.error(
+                f"A receita excede a capacidade geométrica do pátio. "
+                f"Volume da receita = {fmt_br(metrics['volume_total'])} m³ | "
+                f"Volume máximo = {fmt_br(vol_max)} m³"
+            )
+        else:
+            st.success(
+                f"A receita cabe na pilha. "
+                f"Volume da receita = {fmt_br(metrics['volume_total'])} m³ | "
+                f"Volume máximo = {fmt_br(vol_max)} m³"
             )
 
-            if not res.success:
-                st.error(f"O solver não encontrou uma solução viável: {res.message}")
-            else:
-                st.success("Solução otimizada encontrada.")
-                df_valido["ton_calculada"] = res.x
-                df_res = df_valido[df_valido["ton_calculada"] > 1e-6].copy()
+        st.caption(
+            f"Densidade aparente equivalente da receita: {fmt_br(metrics['rho_aparente'], 3)} t/m³ | "
+            f"Altura efetiva estimada: {fmt_br(pile_a['altura_efetiva_m'])} m"
+        )
 
-                metrics = calculate_quality_metrics(df_res)
-                df_total = enrich_total_composition(df_res, metrics)
+        st.divider()
+        st.subheader("Comparação com as Metas da Usina")
+        st.dataframe(
+            df_specs.style.format(
+                {
+                    "resultado": lambda x: fmt_br(x),
+                    "meta": lambda x: fmt_br(x),
+                    "folga": lambda x: fmt_br(x),
+                }
+            ),
+            use_container_width=True,
+        )
 
-                pile_a = prepare_pile_a_strata(
-                    df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep
+        st.divider()
+        st.subheader("Composição da Receita por Média Ponderada")
+        st.dataframe(
+            df_total[["camada", "ton_receita", "volume_m3", "frac_massa_%", "frac_volume_%", "vm", "ts", "cinza", "densidade"]].style.format(
+                {
+                    "ton_receita": lambda x: fmt_br(x),
+                    "volume_m3": lambda x: fmt_br(x),
+                    "frac_massa_%": lambda x: fmt_br(x),
+                    "frac_volume_%": lambda x: fmt_br(x),
+                    "vm": lambda x: fmt_br(x),
+                    "ts": lambda x: fmt_br(x),
+                    "cinza": lambda x: fmt_br(x),
+                    "densidade": lambda x: fmt_br(x),
+                }
+            ),
+            use_container_width=True,
+        )
+
+        if not df_descartadas.empty:
+            st.divider()
+            st.subheader("Linhas Descartadas da Receita")
+            st.dataframe(df_descartadas, use_container_width=True)
+
+        st.divider()
+        st.subheader("Composição, Geometria e Visualização do Caso Selecionado")
+
+        col_tabela, col_grafico = st.columns([1.15, 1.2])
+
+        with col_tabela:
+            st.markdown(f"**Caso exibido:** {modo_construtivo}")
+
+            if modo_construtivo == "Pilha A - Estratos por camada":
+                df_a = pile_a["df_camadas"].copy()
+                st.info(
+                    f"**Pilha A**\n\n"
+                    f"- Estratificação direta das massas da receita;\n"
+                    f"- Altura ocupada: **{fmt_br(pile_a['altura_efetiva_m'])} m**."
                 )
-                pile_b = prepare_pile_b_lifts(
-                    df_res=df_res, comp_base=comp_base, larg_base=larg_base, alt_max=alt_max, angulo_rep=angulo_rep,
-                    altura_lift=altura_lift, altura_sublift=altura_sublift
-                )
-
-                st.divider()
-                st.subheader("Resultados de Qualidade Global do Blend")
-
-                c1, c2, c3, c4 = st.columns(4)
-                c1.metric(
-                    "Massa Total", f"{metrics['massa_final']:,.0f} t", delta=f"{metrics['massa_final'] - alvo_massa:,.0f} vs alvo",
-                )
-
-                cor_vm = "normal" if metrics["vm_final"] >= vm_min else "inverse"
-                c2.metric("VM Final", f"{metrics['vm_final']:.2f}%", delta=f"Mínimo: {vm_min}", delta_color=cor_vm)
-
-                cor_ts = "normal" if metrics["ts_final"] <= ts_max else "inverse"
-                c3.metric("TS Final", f"{metrics['ts_final']:.2f}%", delta=f"Máximo: {ts_max}", delta_color=cor_ts)
-
-                cor_cz = "normal" if metrics["cinza_final"] <= cinza_max else "inverse"
-                c4.metric("Cinza/CBS Final", f"{metrics['cinza_final']:.2f}", delta=f"Máximo: {cinza_max}", delta_color=cor_cz)
-
-                st.caption(
-                    f"Volume usado: {metrics['volume_total']:,.0f} m³ | "
-                    f"Densidade aparente equivalente: {metrics['rho_aparente']:.3f} t/m³ | "
-                    f"Volume máximo do pátio: {vol_max:,.0f} m³"
-                )
-
-                st.divider()
-                st.subheader("Composição Total do Blend Otimizado")
                 st.dataframe(
-                    df_total[["camada", "ton_calculada", "volume_m3", "frac_massa_%", "frac_volume_%"]].style.format(
+                    df_a.style.format(
                         {
-                            "ton_calculada": "{:,.0f}",
-                            "volume_m3": "{:,.0f}",
-                            "frac_massa_%": "{:.2f}",
-                            "frac_volume_%": "{:.2f}",
+                            "ton_receita": lambda x: fmt_br(x),
+                            "densidade": lambda x: fmt_br(x),
+                            "volume_m3": lambda x: fmt_br(x),
+                            "y_base_m": lambda x: fmt_br(x),
+                            "y_topo_m": lambda x: fmt_br(x),
+                            "espessura_m": lambda x: fmt_br(x),
+                            "largura_base_m": lambda x: fmt_br(x),
+                            "largura_topo_m": lambda x: fmt_br(x),
                         }
                     ),
                     use_container_width=True,
                 )
+            else:
+                abas = st.tabs(["Lifts", "Sublifts", "Receita por camada"])
 
-                st.divider()
-                st.subheader("Composição, Geometria e Visualização do Caso Selecionado")
+                with abas[0]:
+                    st.dataframe(
+                        pile_b["df_lifts"].style.format(
+                            {
+                                "y_base_m": lambda x: fmt_br(x),
+                                "y_topo_m": lambda x: fmt_br(x),
+                                "altura_lift_m": lambda x: fmt_br(x),
+                                "largura_base_m": lambda x: fmt_br(x),
+                                "largura_topo_m": lambda x: fmt_br(x),
+                                "volume_lift_m3": lambda x: fmt_br(x),
+                                "massa_lift_t": lambda x: fmt_br(x),
+                            }
+                        ),
+                        use_container_width=True,
+                    )
 
-                col_tabela, col_grafico = st.columns([1.15, 1.2])
+                with abas[1]:
+                    st.dataframe(
+                        pile_b["df_sublifts"].style.format(
+                            {
+                                "y_base_m": lambda x: fmt_br(x),
+                                "y_topo_m": lambda x: fmt_br(x),
+                                "altura_sublift_m": lambda x: fmt_br(x),
+                                "largura_base_m": lambda x: fmt_br(x),
+                                "largura_topo_m": lambda x: fmt_br(x),
+                                "volume_sublift_m3": lambda x: fmt_br(x),
+                                "massa_sublift_t": lambda x: fmt_br(x),
+                            }
+                        ),
+                        use_container_width=True,
+                    )
 
-                with col_tabela:
-                    st.markdown(f"**Caso exibido:** {modo_construtivo}")
+                with abas[2]:
+                    st.dataframe(
+                        pile_b["df_layers"][["camada", "ton_receita", "volume_m3", "frac_massa_%", "frac_volume_%"]].style.format(
+                            {
+                                "ton_receita": lambda x: fmt_br(x),
+                                "volume_m3": lambda x: fmt_br(x),
+                                "frac_massa_%": lambda x: fmt_br(x),
+                                "frac_volume_%": lambda x: fmt_br(x),
+                            }
+                        ),
+                        use_container_width=True,
+                    )
 
-                    if modo_construtivo == "Pilha A - Estratos por camada":
-                        df_a = pile_a["df_camadas"].copy()
-                        st.info(
-                            f"**Pilha A**\n\n"
-                            f"- Primeira camada esteirada como base;\n"
-                            f"- Demais camadas empilhadas por cima como estratos puros;\n"
-                            f"- Altura ocupada: **{pile_a['altura_efetiva_m']:.2f} m**."
-                        )
-                        st.dataframe(
-                            df_a.style.format(
-                                {
-                                    "ton_calculada": "{:,.0f}",
-                                    "densidade": "{:.2f}",
-                                    "volume_m3": "{:,.0f}",
-                                    "y_base_m": "{:.2f}",
-                                    "y_topo_m": "{:.2f}",
-                                    "espessura_m": "{:.2f}",
-                                    "largura_base_m": "{:.2f}",
-                                    "largura_topo_m": "{:.2f}",
-                                }
-                            ),
-                            use_container_width=True,
-                        )
+                st.info(
+                    f"**Pilha B**\n\n"
+                    f"- A receita informada é desdobrada em lifts e sublifts para visualização executiva;\n"
+                    f"- Altura máxima de lift: **{fmt_br(altura_lift)} m**;\n"
+                    f"- Altura máxima de sublift: **{fmt_br(altura_sublift)} m**;\n"
+                    f"- Altura ocupada: **{fmt_br(pile_b['altura_efetiva_m'])} m**."
+                )
 
-                    else:
-                        abas = st.tabs(["Lifts", "Sublifts", "Receita por camada"])
+        with col_grafico:
+            if modo_construtivo == "Pilha A - Estratos por camada":
+                fig = build_pile_a_figure(pile_a["df_camadas"], larg_base, alt_max, angulo_rep)
+            else:
+                fig = build_pile_b_figure(pile_b, larg_base, alt_max, angulo_rep)
+            st.plotly_chart(fig, use_container_width=True)
 
-                        with abas[0]:
-                            df_show_lifts = pile_b["df_lifts"][
-                                [
-                                    "lift_global", "lift_nome", "camada", "lift_seq", "y_base_m",
-                                    "y_topo_m", "altura_lift_m", "largura_base_m", "largura_topo_m",
-                                    "volume_lift_m3", "massa_lift_t",
-                                ]
-                            ].copy()
-                            st.dataframe(
-                                df_show_lifts.style.format(
-                                    {
-                                        "y_base_m": "{:.2f}", "y_topo_m": "{:.2f}", "altura_lift_m": "{:.2f}",
-                                        "largura_base_m": "{:.2f}", "largura_topo_m": "{:.2f}",
-                                        "volume_lift_m3": "{:,.0f}", "massa_lift_t": "{:,.0f}",
-                                    }
-                                ),
-                                use_container_width=True,
-                            )
+        excel_bytes = export_excel(
+            df_input=df_norm,
+            df_usadas=df_receita,
+            df_descartadas=df_descartadas,
+            df_total=df_total,
+            df_specs=df_specs,
+            pile_a=pile_a,
+            pile_b=pile_b,
+            geometry=geometry,
+        )
 
-                        with abas[1]:
-                            df_show_sublifts = pile_b["df_sublifts"][
-                                [
-                                    "lift_global", "lift_nome", "sublift_nome", "camada", "sublift_seq",
-                                    "y_base_m", "y_topo_m", "altura_sublift_m", "largura_base_m",
-                                    "largura_topo_m", "volume_sublift_m3", "massa_sublift_t",
-                                ]
-                            ].copy()
-                            st.dataframe(
-                                df_show_sublifts.style.format(
-                                    {
-                                        "y_base_m": "{:.2f}", "y_topo_m": "{:.2f}", "altura_sublift_m": "{:.2f}",
-                                        "largura_base_m": "{:.2f}", "largura_topo_m": "{:.2f}",
-                                        "volume_sublift_m3": "{:,.0f}", "massa_sublift_t": "{:,.0f}",
-                                    }
-                                ),
-                                use_container_width=True,
-                            )
+        st.download_button(
+            "Baixar resultado em Excel",
+            data=excel_bytes,
+            file_name="resultado_media_ponderada_pilha_rom.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
 
-                        with abas[2]:
-                            # CORREÇÃO APLICADA AQUI
-                            st.dataframe(
-                                pile_b["df_layers"][["camada", "ton_calculada", "volume_m3", "frac_massa_%", "frac_volume_%"]].style.format(
-                                    {
-                                        "ton_calculada": "{:,.0f}",
-                                        "volume_m3": "{:,.0f}",
-                                        "frac_massa_%": "{:.4f}",
-                                        "frac_volume_%": "{:.4f}",
-                                    }
-                                ),
-                                use_container_width=True,
-                            )
-
-                        st.info(
-                            f"**Pilha B**\n\n"
-                            f"- Cada camada geológica da Pilha A é subdividida em lifts sucessivos;\n"
-                            f"- Cada lift pode ser subdividido em sublifts;\n"
-                            f"- Altura máxima de lift: **{altura_lift:.2f} m**;\n"
-                            f"- Altura máxima de sublift: **{altura_sublift:.2f} m**;\n"
-                            f"- Altura ocupada: **{pile_b['altura_efetiva_m']:.2f} m**."
-                        )
-
-                with col_grafico:
-                    if modo_construtivo == "Pilha A - Estratos por camada":
-                        fig = build_pile_a_figure(pile_a["df_camadas"], larg_base, alt_max, angulo_rep)
-                    else:
-                        fig = build_pile_b_figure(pile_b, larg_base, alt_max, angulo_rep)
-                    st.plotly_chart(fig, use_container_width=True)
-
-        except Exception as e:
-            st.error(f"Erro na execução matemática: {e}")
+    except Exception as e:
+        st.error(f"Erro na execução matemática: {e}")
